@@ -7,7 +7,8 @@ data class ArvioLoginRequest(
     @SerializedName("username") val username: String,
     @SerializedName("password") val password: String,
     @SerializedName("device_name") val deviceName: String = "Android TV",
-    @SerializedName("server_url") val serverUrl: String = ""
+    @SerializedName("server_url") val serverUrl: String = "",
+    @SerializedName("device_id") val deviceId: String = ""
 )
 
 data class ArvioUser(

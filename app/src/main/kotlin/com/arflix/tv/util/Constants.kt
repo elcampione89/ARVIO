@@ -7,7 +7,7 @@ import com.arflix.tv.BuildConfig
  */
 object Constants {
     // Cockpit Arvio module URL
-    const val COCKPIT_API_URL = "https://blacksheep.lol/HeavyMetal/api/arvio/"
+    const val COCKPIT_API_URL = com.arflix.tv.BuildConfig.PANEL_API_URL
 
     // Supabase - keys from BuildConfig (secrets.properties).
     val SUPABASE_URL: String get() = BuildConfig.SUPABASE_URL

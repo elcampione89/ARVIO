@@ -62,6 +62,16 @@ val downloadSherpaOnnx = tasks.register("downloadSherpaOnnx") {
     doLast { ensureSherpaOnnxAar() }
 }
 
+// This copy of ARVIO talks to its own panel. Set these in gradle.properties.
+val panelApiUrl = providers.gradleProperty("panelApiUrl").orNull?.trim().orEmpty().let { url ->
+    require(url.startsWith("http://") || url.startsWith("https://")) {
+        "Set panelApiUrl in gradle.properties to your panel's app address, e.g. https://example.com/panel/api/arvio/"
+    }
+    if (url.endsWith("/")) url else "$url/"
+}
+val panelAppId = providers.gradleProperty("panelAppId").orNull?.trim()?.takeIf { it.isNotBlank() } ?: "com.arvio.tv"
+val panelAppName = providers.gradleProperty("panelAppName").orNull?.trim()?.takeIf { it.isNotBlank() } ?: "ARVIO"
+
 val discordSdkAar = layout.projectDirectory.file("libs/discord_partner_sdk.aar").asFile
 val hasDiscordSdk = discordSdkAar.isFile
 val includeX86Abis = providers.gradleProperty("includeX86Abis")
@@ -76,7 +86,9 @@ android {
     flavorDimensions += "distribution"
 
     defaultConfig {
-        applicationId = "com.arvio.tv"
+        applicationId = panelAppId
+        manifestPlaceholders["appLabel"] = panelAppName
+        buildConfigField("String", "PANEL_API_URL", "\"$panelApiUrl\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Fire TV devices can be as low as Android 7.1 (API 25) or lower depending on model/OS.
         minSdk = 23

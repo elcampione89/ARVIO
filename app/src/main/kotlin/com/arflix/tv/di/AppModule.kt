@@ -192,9 +192,24 @@ object AppModule {
     @Provides
     @Singleton
     fun provideCockpitArvioApi(okHttpClient: OkHttpClient): CockpitArvioApi {
+        // The panel records which app version each device runs. Some web hosts strip the
+        // Authorization header, so the token is also sent in X-Arvio-Token.
+        val panelClient = okHttpClient.newBuilder()
+            .cache(null)
+            .addInterceptor { chain ->
+                val original = chain.request()
+                val builder = original.newBuilder()
+                    .header("X-Arvio-Version", com.arflix.tv.BuildConfig.VERSION_NAME)
+                original.header("Authorization")
+                    ?.removePrefix("Bearer ")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { builder.header("X-Arvio-Token", it) }
+                chain.proceed(builder.build())
+            }
+            .build()
         return Retrofit.Builder()
             .baseUrl(Constants.COCKPIT_API_URL)
-            .client(okHttpClient)
+            .client(panelClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(CockpitArvioApi::class.java)

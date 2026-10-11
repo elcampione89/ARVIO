@@ -17,6 +17,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import retrofit2.HttpException
 import javax.inject.Inject
 import javax.inject.Provider
 import javax.inject.Singleton
@@ -73,6 +80,56 @@ class AuthRepository @Inject constructor(
     private val _userProfile = MutableStateFlow<UserProfile?>(null)
     val userProfile: StateFlow<UserProfile?> = _userProfile.asStateFlow()
     private val gson = Gson()
+    private val panelScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Stable per-install id so signing in again on this device reuses its slot on the panel. */
+    private fun deviceId(): String = runCatching {
+        android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+    }.getOrNull().orEmpty()
+
+    private fun deviceName(): String {
+        val model = listOf(android.os.Build.MANUFACTURER, android.os.Build.MODEL)
+            .filter { !it.isNullOrBlank() }
+            .joinToString(" ")
+            .trim()
+        return model.ifBlank { "Android device" }
+    }
+
+    /** Turns the panel's {"message": "..."} error replies into text the user can read. */
+    private fun panelErrorMessage(e: Throwable, fallback: String): String {
+        if (e is HttpException) {
+            val body = runCatching { e.response()?.errorBody()?.string() }.getOrNull().orEmpty()
+            val message = runCatching { JSONObject(body).optString("message") }.getOrNull().orEmpty()
+            if (message.isNotBlank()) return message
+            return when (e.code()) {
+                401 -> "Wrong username or password."
+                403 -> "This account can't sign in right now. Please contact your provider."
+                429 -> "Too many attempts. Please wait a few minutes and try again."
+                else -> "The panel returned an error (${e.code()}). Please try again."
+            }
+        }
+        if (e is java.io.IOException) return "Can't reach the panel. Check your internet connection."
+        return e.message ?: fallback
+    }
+
+    /**
+     * Confirms with the panel that this device may still use the app. A 401/403 means the line
+     * was disabled, expired, removed or signed out from the panel, so the app signs out too.
+     */
+    private fun verifySessionWithPanel(accessToken: String) {
+        panelScope.launch {
+            try {
+                cockpitArvioApi.getMe("Bearer $accessToken").close()
+            } catch (e: HttpException) {
+                if (e.code() == 401 || e.code() == 403) {
+                    AppLogger.breadcrumb("Auth", "panel_session_rejected code=${e.code()}", severity = "warning")
+                    signOut(notifyPanel = false)
+                }
+            } catch (_: Exception) {
+                // Offline or panel unreachable: keep the user signed in.
+            }
+        }
+    }
 
     suspend fun checkAuthState() {
         try {
@@ -87,6 +144,7 @@ class AuthRepository @Inject constructor(
                 _userProfile.value = profile
                 _authState.value = AuthState.Authenticated(cachedUserId, email, profile)
                 runCatching { provisionPanelAddonsFromCloud() }
+                verifySessionWithPanel(accessToken)
             } else {
                 _authState.value = AuthState.NotAuthenticated
             }
@@ -109,8 +167,9 @@ class AuthRepository @Inject constructor(
                 com.arflix.tv.data.api.ArvioLoginRequest(
                     username = username,
                     password = password,
-                    deviceName = "Android TV",
-                    serverUrl = serverUrl.trim()
+                    deviceName = deviceName(),
+                    serverUrl = serverUrl.trim(),
+                    deviceId = deviceId()
                 )
             )
 
@@ -143,7 +202,7 @@ class AuthRepository @Inject constructor(
             AppLogger.breadcrumb("Auth", "panel_sign_in_success")
             Result.success(Unit)
         } catch (e: Exception) {
-            val message = e.message ?: "Sign in failed"
+            val message = panelErrorMessage(e, "Sign in failed")
             _authState.value = AuthState.Error(message)
             AppLogger.breadcrumb("Auth", "panel_sign_in_failed", severity = "warning")
             Result.failure(Exception(message))
@@ -159,6 +218,19 @@ class AuthRepository @Inject constructor(
     }
 
     suspend fun signOut() {
+        signOut(notifyPanel = true)
+    }
+
+    private suspend fun signOut(notifyPanel: Boolean) {
+        if (notifyPanel) {
+            // Free this device's slot on the panel; never block sign-out on it.
+            val token = runCatching { context.authDataStore.data.first()[PrefsKeys.ACCESS_TOKEN] }.getOrNull()
+            if (!token.isNullOrBlank()) {
+                runCatching {
+                    kotlinx.coroutines.withTimeoutOrNull(5_000) { cockpitArvioApi.logout("Bearer $token").close() }
+                }
+            }
+        }
         try {
             traktRepositoryProvider.get().logout()
         } catch (e: Exception) {}
@@ -226,13 +298,20 @@ class AuthRepository @Inject constructor(
                 return Result.success(prefs[PrefsKeys.ACCOUNT_SYNC_PAYLOAD])
             }
 
-            val payload = cockpitArvioApi.getAccountSyncPayload("Bearer $accessToken")
-            val json = gson.toJson(payload)
+            // Kept as raw text: profiles, settings and playlists must round-trip untouched.
+            val json = cockpitArvioApi.getAccountSyncPayload("Bearer $accessToken").use { it.string() }.trim()
+            val isEmpty = json.isBlank() || runCatching { JSONObject(json).length() == 0 }.getOrDefault(true)
+            if (isEmpty) {
+                return Result.success(prefs[PrefsKeys.ACCOUNT_SYNC_PAYLOAD])
+            }
             context.authDataStore.edit { editPrefs ->
                 editPrefs[PrefsKeys.ACCOUNT_SYNC_PAYLOAD] = json
             }
             Result.success(json)
         } catch (e: Exception) {
+            if (e is HttpException && (e.code() == 401 || e.code() == 403)) {
+                signOut(notifyPanel = false)
+            }
             val cached = context.authDataStore.data.first()[PrefsKeys.ACCOUNT_SYNC_PAYLOAD]
             if (!cached.isNullOrBlank()) {
                 Result.success(cached)
@@ -247,8 +326,20 @@ class AuthRepository @Inject constructor(
             context.authDataStore.edit { prefs ->
                 prefs[PrefsKeys.ACCOUNT_SYNC_PAYLOAD] = payload
             }
+            val accessToken = context.authDataStore.data.first()[PrefsKeys.ACCESS_TOKEN]
+            if (accessToken.isNullOrBlank()) {
+                return Result.failure(IllegalStateException("Not signed in"))
+            }
+            // Upload so this line's other devices load the same profiles and settings.
+            cockpitArvioApi.saveAccountSyncPayload(
+                "Bearer $accessToken",
+                payload.toRequestBody("application/json; charset=utf-8".toMediaType())
+            ).close()
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is HttpException && (e.code() == 401 || e.code() == 403)) {
+                signOut(notifyPanel = false)
+            }
             Result.failure(e)
         }
     }
