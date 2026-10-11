@@ -30,6 +30,10 @@ interface CockpitArvioApi {
     @GET("me.php")
     suspend fun getMe(@Header("Authorization") authorization: String): ResponseBody
 
+    /** Addons the panel assigns to this line, and panel addons to remove. */
+    @GET("addons.php")
+    suspend fun getAddons(@Header("Authorization") authorization: String): ResponseBody
+
     /** Frees this device's slot on the panel. */
     @POST("logout.php")
     suspend fun logout(@Header("Authorization") authorization: String): ResponseBody

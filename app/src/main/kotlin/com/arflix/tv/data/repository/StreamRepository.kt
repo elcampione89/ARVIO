@@ -646,7 +646,105 @@ class StreamRepository @Inject constructor(
             enforceOpenSubtitles(addons).map { sanitizeAddonDisplayName(it) }
         }
 
+    // ---- Addons managed from the panel ----
+    // The panel decides which addons a line has. They are layered over the user's own list every
+    // time addons are read, so a profile sync restoring an older list can neither drop a panel
+    // addon nor bring back one the panel removed.
+    private val panelAddonsKey = stringPreferencesKey("panel_addons_v1")
+    private val panelAddonKeysKey = stringPreferencesKey("panel_addon_keys_v1")
+    private val panelRemovedKey = stringPreferencesKey("panel_removed_addons_v1")
+
+    private fun panelAddonMatchKey(url: String?): String? {
+        var u = url?.trim()?.lowercase().orEmpty()
+        if (u.isBlank()) return null
+        if (u.startsWith("stremio://")) u = "https://" + u.removePrefix("stremio://")
+        u = u.removePrefix("https://").removePrefix("http://").trimEnd('/')
+        u = u.removeSuffix("/manifest.json").trimEnd('/')
+        return u.ifBlank { null }
+    }
+
+    private fun readPanelRemoved(prefs: Preferences): Set<String> = runCatching {
+        val type = TypeToken.getParameterized(List::class.java, String::class.java).type
+        gson.fromJson<List<String>>(prefs[panelRemovedKey], type).orEmpty().toSet()
+    }.getOrDefault(emptySet())
+
+    private fun mergePanelAddons(list: List<Addon>, prefs: Preferences): List<Addon> {
+        val panel = parseAddons(prefs[panelAddonsKey]).orEmpty()
+        val removed = readPanelRemoved(prefs)
+        if (panel.isEmpty() && removed.isEmpty()) return list
+        val panelKeys = panel.mapNotNull { panelAddonMatchKey(it.url) }.toSet()
+        val localByKey = list.filter { panelAddonMatchKey(it.url) != null }
+            .associateBy { panelAddonMatchKey(it.url) }
+        // Keep the user's own on/off choice for a panel addon.
+        val panelFinal = panel.map { addon ->
+            localByKey[panelAddonMatchKey(addon.url)]?.let { addon.copy(isEnabled = it.isEnabled) } ?: addon
+        }
+        val rest = list.filter { addon ->
+            val key = panelAddonMatchKey(addon.url)
+            key == null || (key !in panelKeys && key !in removed)
+        }
+        return panelFinal + rest
+    }
+
+    /**
+     * Installs the panel's addons for this line and removes panel addons it no longer has.
+     * Returns false if any addon could not be installed (e.g. offline), so the caller retries later.
+     */
+    suspend fun applyPanelAddons(specs: List<PanelAddonSpec>, removedUrls: List<String>): Boolean = withContext(Dispatchers.IO) {
+        val prefs = context.streamDataStore.data.first()
+        val cached = parseAddons(prefs[panelAddonsKey]).orEmpty()
+        val cachedKeys: Map<String, String> = runCatching {
+            val type = TypeToken.getParameterized(Map::class.java, String::class.java, String::class.java).type
+            gson.fromJson<Map<String, String>>(prefs[panelAddonKeysKey], type).orEmpty()
+        }.getOrDefault(emptyMap())
+
+        var complete = true
+        val installed = mutableListOf<Addon>()
+        val keys = LinkedHashMap<String, String>()
+        for (spec in specs) {
+            // Same key = same revision as last time: reuse it without touching the network.
+            val reused = cachedKeys[spec.key]?.let { id -> cached.firstOrNull { it.id == id } }
+            val addon = reused
+                ?: runCatching { hydrateCustomAddon(spec.url, spec.name) }
+                    .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                    .getOrNull()
+                ?: cached.firstOrNull { panelAddonMatchKey(it.url) == panelAddonMatchKey(spec.url) }
+                    .also { complete = false }
+            if (addon != null) {
+                installed += addon
+                keys[spec.key] = addon.id
+            }
+        }
+
+        val keepKeys = installed.mapNotNull { panelAddonMatchKey(it.url) }.toSet()
+        val removed = (removedUrls.mapNotNull { panelAddonMatchKey(it) } +
+            cached.mapNotNull { panelAddonMatchKey(it.url) })
+            .filterNot { it in keepKeys }
+            .toSortedSet()
+
+        context.streamDataStore.edit { p ->
+            p[panelAddonsKey] = gson.toJson(installed)
+            p[panelAddonKeysKey] = gson.toJson(keys)
+            p[panelRemovedKey] = gson.toJson(removed.toList())
+            val stored = readStoredAddons(p) ?: getDefaultAddonList()
+            p[sharedAddonsKey] = gson.toJson(
+                enforceOpenSubtitles(mergePanelAddons(stored, p)).filterNot(::isIncompleteExternalAddon)
+            )
+            p.remove(sharedPendingAddonsKey)
+        }
+        synchronized(streamResultCache) { streamResultCache.clear() }
+        complete
+    }
+
     private fun readSharedOrLegacyAddons(prefs: Preferences): List<Addon>? {
+        val stored = readStoredAddons(prefs)
+        if (stored == null && prefs[panelAddonsKey].isNullOrBlank() && prefs[panelRemovedKey].isNullOrBlank()) {
+            return null
+        }
+        return mergePanelAddons(stored ?: getDefaultAddonList(), prefs)
+    }
+
+    private fun readStoredAddons(prefs: Preferences): List<Addon>? {
         parseAddons(prefs[sharedAddonsKey])?.takeIf { it.isNotEmpty() }?.let { return it }
         parseAddons(prefs[sharedPendingAddonsKey])?.takeIf { it.isNotEmpty() }?.let { return it }
 
@@ -5168,3 +5266,10 @@ data class AddonRefreshReport(
 private object StreamRepositoryTypeTokens {
     val ADDON_HEALTH_TYPE: java.lang.reflect.Type = com.google.gson.reflect.TypeToken.getParameterized(Map::class.java, String::class.java, StreamRepository.AddonRuntimeHealth::class.java).type
 }
+
+/** An addon the panel assigns to this line; [key] changes whenever the panel wants it reinstalled. */
+data class PanelAddonSpec(
+    val key: String,
+    val url: String,
+    val name: String?
+)

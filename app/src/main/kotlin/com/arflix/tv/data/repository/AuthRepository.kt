@@ -72,6 +72,7 @@ class AuthRepository @Inject constructor(
         val USER_EMAIL = stringPreferencesKey("user_email")
         val DISPLAY_NAME = stringPreferencesKey("display_name")
         val ACCOUNT_SYNC_PAYLOAD = stringPreferencesKey("account_sync_payload")
+        val PANEL_ADDONS_REVISION = stringPreferencesKey("panel_addons_revision")
     }
 
     private val _authState = MutableStateFlow<AuthState>(AuthState.Loading)
@@ -119,7 +120,12 @@ class AuthRepository @Inject constructor(
     private fun verifySessionWithPanel(accessToken: String) {
         panelScope.launch {
             try {
-                cockpitArvioApi.getMe("Bearer $accessToken").close()
+                val me = cockpitArvioApi.getMe("Bearer $accessToken").use { it.string() }
+                val revision = runCatching { JSONObject(me).optString("addons_revision") }.getOrNull().orEmpty()
+                val known = context.authDataStore.data.first()[PrefsKeys.PANEL_ADDONS_REVISION].orEmpty()
+                if (revision.isNotBlank() && revision != known) {
+                    syncPanelAddons(accessToken)
+                }
             } catch (e: HttpException) {
                 if (e.code() == 401 || e.code() == 403) {
                     AppLogger.breadcrumb("Auth", "panel_session_rejected code=${e.code()}", severity = "warning")
@@ -128,6 +134,46 @@ class AuthRepository @Inject constructor(
             } catch (_: Exception) {
                 // Offline or panel unreachable: keep the user signed in.
             }
+        }
+    }
+
+    /** Installs/removes the addons the panel assigns to this line. */
+    private suspend fun syncPanelAddons(accessToken: String) {
+        try {
+            val body = cockpitArvioApi.getAddons("Bearer $accessToken").use { it.string() }
+            val root = JSONObject(body)
+            val list = root.optJSONArray("addons")
+            val specs = buildList {
+                if (list != null) {
+                    for (i in 0 until list.length()) {
+                        val o = list.optJSONObject(i) ?: continue
+                        val url = o.optString("url")
+                        if (url.isBlank()) continue
+                        add(
+                            PanelAddonSpec(
+                                key = o.optString("key").ifBlank { url },
+                                url = url,
+                                name = o.optString("name").takeIf { !o.isNull("name") && it.isNotBlank() }
+                            )
+                        )
+                    }
+                }
+            }
+            val removedJson = root.optJSONArray("removed_urls")
+            val removed = buildList {
+                if (removedJson != null) for (i in 0 until removedJson.length()) add(removedJson.optString(i))
+            }.filter { it.isNotBlank() }
+            val complete = streamRepositoryProvider.get().applyPanelAddons(specs, removed)
+            if (complete) {
+                context.authDataStore.edit { it[PrefsKeys.PANEL_ADDONS_REVISION] = root.optString("revision") }
+            }
+            AppLogger.breadcrumb("Auth", "panel_addons_applied count=${specs.size} complete=$complete")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is HttpException && (e.code() == 401 || e.code() == 403)) {
+                signOut(notifyPanel = false)
+            }
+            AppLogger.breadcrumb("Auth", "panel_addons_failed ${e.javaClass.simpleName}", severity = "warning")
         }
     }
 
@@ -200,6 +246,8 @@ class AuthRepository @Inject constructor(
             _authState.value = AuthState.Authenticated(user.id, user.email, profile)
 
             AppLogger.breadcrumb("Auth", "panel_sign_in_success")
+            // Install this line's panel addons in the background; sign-in does not wait for it.
+            panelScope.launch { syncPanelAddons(tokens.accessToken) }
             Result.success(Unit)
         } catch (e: Exception) {
             val message = panelErrorMessage(e, "Sign in failed")
