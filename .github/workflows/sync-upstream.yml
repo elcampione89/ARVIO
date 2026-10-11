@@ -207,7 +207,7 @@ jobs:
       - name: Push verified target branch
         if: steps.overlay.outputs.no_changes != 'true'
         env:
-          GH_TOKEN: ${{ secrets.ARVIO_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.ARVIO_RELEASE_TOKEN || github.token }}
         run: |
           basic_auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)"
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic_auth" \
@@ -217,7 +217,7 @@ jobs:
       - name: Publish verified GitHub release
         if: steps.overlay.outputs.no_changes != 'true'
         env:
-          GH_TOKEN: ${{ secrets.ARVIO_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.ARVIO_RELEASE_TOKEN || github.token }}
         shell: bash
         run: |
           gh release create "${{ steps.release.outputs.tag }}" \

@@ -1,6 +1,8 @@
 name: Build APK Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -117,7 +119,7 @@ jobs:
       - name: Create version release
         if: steps.release.outputs.new == 'true'
         env:
-          GH_TOKEN: ${{ secrets.ARVIO_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.ARVIO_RELEASE_TOKEN || github.token }}
         shell: bash
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
