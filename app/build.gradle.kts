@@ -27,31 +27,39 @@ plugins {
 val sherpaOnnxVersion = "1.13.8"
 val sherpaOnnxSha256 = "633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96"
 val sherpaOnnxAar = layout.projectDirectory.file("libs/sherpa-onnx-$sherpaOnnxVersion.aar")
+fun sherpaSha256(file: File): String = MessageDigest.getInstance("SHA-256")
+    .digest(file.readBytes()).joinToString("") { byte -> "%02x".format(byte) }
+fun ensureSherpaOnnxAar() {
+    val aar = sherpaOnnxAar.asFile
+    if (aar.isFile && sherpaSha256(aar) == sherpaOnnxSha256) return
+    val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaOnnxVersion/sherpa-onnx-$sherpaOnnxVersion.aar"
+    logger.lifecycle("Downloading $url")
+    aar.parentFile.mkdirs()
+    val partial = File(aar.path + ".part")
+    try {
+        URI(url).toURL().openConnection().apply {
+            connectTimeout = 30_000
+            readTimeout = 60_000
+        }.getInputStream().use { input -> partial.outputStream().use { output -> input.copyTo(output) } }
+        check(sherpaSha256(partial) == sherpaOnnxSha256) { "Checksum mismatch for $url" }
+        Files.move(partial.toPath(), aar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    } finally {
+        partial.delete()
+    }
+}
+// Android Studio resolves the sideload dependencies during project sync, before
+// any task runs, so a missing AAR breaks sync. Fetch it up front when absent.
+if (!sherpaOnnxAar.asFile.isFile) {
+    runCatching { ensureSherpaOnnxAar() }
+        .onFailure { logger.warn("sherpa-onnx AAR download failed during configuration: ${it.message}") }
+}
 val downloadSherpaOnnx = tasks.register("downloadSherpaOnnx") {
     val aar = sherpaOnnxAar.asFile
     inputs.property("version", sherpaOnnxVersion)
     inputs.property("sha256", sherpaOnnxSha256)
     outputs.file(aar)
-    fun sha256(file: File): String = MessageDigest.getInstance("SHA-256")
-        .digest(file.readBytes()).joinToString("") { byte -> "%02x".format(byte) }
-    outputs.upToDateWhen { aar.isFile && sha256(aar) == sherpaOnnxSha256 }
-    doLast {
-        if (aar.isFile && sha256(aar) == sherpaOnnxSha256) return@doLast
-        val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaOnnxVersion/sherpa-onnx-$sherpaOnnxVersion.aar"
-        logger.lifecycle("Downloading $url")
-        aar.parentFile.mkdirs()
-        val partial = File(aar.path + ".part")
-        try {
-            URI(url).toURL().openConnection().apply {
-                connectTimeout = 30_000
-                readTimeout = 60_000
-            }.getInputStream().use { input -> partial.outputStream().use { output -> input.copyTo(output) } }
-            check(sha256(partial) == sherpaOnnxSha256) { "Checksum mismatch for $url" }
-            Files.move(partial.toPath(), aar.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        } finally {
-            partial.delete()
-        }
-    }
+    outputs.upToDateWhen { aar.isFile && sherpaSha256(aar) == sherpaOnnxSha256 }
+    doLast { ensureSherpaOnnxAar() }
 }
 
 val discordSdkAar = layout.projectDirectory.file("libs/discord_partner_sdk.aar").asFile
