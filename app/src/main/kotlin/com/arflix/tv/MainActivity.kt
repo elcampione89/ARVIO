@@ -738,8 +738,13 @@ fun ArflixApp(
     var selectedSessionProfileId by rememberSaveable {
         mutableStateOf(ProfileSessionGate.initialProfileId(skipProfileSelection == true, activeProfile))
     }
+    // Cockpit panel: the app is unusable until the user signs in with their panel account.
     val startDestination = rememberSaveable {
-        if (selectedSessionProfileId != null) Screen.Home.route else Screen.ProfileSelection.route
+        when {
+            authState !is AuthState.Authenticated -> Screen.Login.route
+            selectedSessionProfileId != null -> Screen.Home.route
+            else -> Screen.ProfileSelection.route
+        }
     }
     val canOpenPendingLink = ProfileSessionGate.canOpenLink(activeProfile?.id, selectedSessionProfileId)
 

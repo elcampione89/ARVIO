@@ -20,6 +20,9 @@ import com.arflix.tv.util.Constants
 import com.arflix.tv.util.DeviceIpAddress
 import com.arflix.tv.util.DiagnosticsManager
 import com.arflix.tv.util.QrCodeGenerator
+import com.arflix.tv.data.api.ArvioPortal
+import com.arflix.tv.util.authDataStore
+import com.arflix.tv.data.api.CockpitArvioApi
 import com.arflix.tv.data.api.StalkerApi
 import com.arflix.tv.data.api.TraktDeviceCode
 import com.arflix.tv.data.model.Addon
@@ -322,6 +325,12 @@ data class SettingsUiState(
     val iptvAvailableGroups: List<String> = emptyList(),
     val iptvHiddenGroups: List<String> = emptyList(),
     val iptvGroupOrder: List<String> = emptyList(),
+    // Cockpit panel: credentials from panel sign-in and the panel-managed IPTV services.
+    val iptvLoginUsername: String = "",
+    val iptvLoginPassword: String = "",
+    val isLoadingPortals: Boolean = false,
+    val portalError: String? = null,
+    val portals: List<ArvioPortal> = emptyList(),
     /** True while the open categories page belongs to a Stalker portal. */
     val iptvSelectedIsStalkerPortal: Boolean = false,
     val iptvCategoryTab: StalkerCategoryTab = StalkerCategoryTab.LIVE,
@@ -444,7 +453,8 @@ class SettingsViewModel @Inject constructor(
     private val streamIntegrationRepository: StreamIntegrationRepository,
     private val pluginManager: PluginManager,
     private val telegramRepository: TelegramRepository,
-    private val communityAddonRepository: CommunityAddonRepository
+    private val communityAddonRepository: CommunityAddonRepository,
+    private val cockpitArvioApi: CockpitArvioApi
 ) : ViewModel() {
     private fun visibleCatalogs(catalogs: List<CatalogConfig>): List<CatalogConfig> {
         return catalogs.filter { config ->
@@ -603,8 +613,10 @@ class SettingsViewModel @Inject constructor(
         observeHomeServer()
         observeSyncState()
         observeAuthState()
+        observeAuthCredentials()
         observeIptvConfig()
         observeIptvGroupPrefs()
+        loadPortals()
         initializeCatalogs()
         observeCatalogs()
         observeStreamIntegrations()
@@ -2717,6 +2729,38 @@ class SettingsViewModel @Inject constructor(
                 } else if (!isLoggedIn) {
                     lastCloudSyncedUserId = null
                 }
+            }
+        }
+    }
+
+    private fun loadPortals() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoadingPortals = true, portalError = null)
+            runCatching { cockpitArvioApi.getPortals().portals }
+                .onSuccess { portals ->
+                    _uiState.value = _uiState.value.copy(
+                        isLoadingPortals = false,
+                        portalError = null,
+                        portals = portals.filter { it.id != 0 }
+                    )
+                }
+                .onFailure {
+                    _uiState.value = _uiState.value.copy(
+                        isLoadingPortals = false,
+                        portalError = "Unable to load panel services.",
+                        portals = emptyList()
+                    )
+                }
+        }
+    }
+
+    private fun observeAuthCredentials() {
+        viewModelScope.launch {
+            context.authDataStore.data.collect { prefs ->
+                _uiState.value = _uiState.value.copy(
+                    iptvLoginUsername = prefs[stringPreferencesKey("username")].orEmpty(),
+                    iptvLoginPassword = prefs[stringPreferencesKey("password")].orEmpty()
+                )
             }
         }
     }

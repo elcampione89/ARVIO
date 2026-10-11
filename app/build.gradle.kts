@@ -90,7 +90,7 @@ android {
         buildConfigField("Boolean", "ENABLE_REALTIME_CLOUD_SYNC", "true")
         buildConfigField("Boolean", "ENABLE_REALTIME_WATCH_SYNC", "false")
         buildConfigField("Boolean", "ENABLE_PERIODIC_CLOUD_PULL", "false")
-        buildConfigField("Boolean", "ENABLE_NETLIFY_CLOUD_SYNC", "true")
+        buildConfigField("Boolean", "ENABLE_NETLIFY_CLOUD_SYNC", "false")
         buildConfigField("Boolean", "ENABLE_SUPABASE_SYNC_MIRROR", "false")
         buildConfigField("Boolean", "DISCORD_RICH_PRESENCE_AVAILABLE", hasDiscordSdk.toString())
         buildConfigField(
@@ -98,16 +98,8 @@ android {
             "DISCORD_APPLICATION_ID",
             "\"${escapeBuildConfigString(localSecretValue("DISCORD_CLIENT_ID"))}\""
         )
-        buildConfigField(
-            "String",
-            "NETLIFY_BACKEND_URL",
-            "\"${escapeBuildConfigString(localSecretValue("NETLIFY_BACKEND_URL"))}\""
-        )
-        buildConfigField(
-            "String",
-            "APP_ANON_KEY",
-            "\"${escapeBuildConfigString(localSecretValue("APP_ANON_KEY").ifBlank { localSecretValue("SUPABASE_ANON_KEY") })}\""
-        )
+        buildConfigField("String", "NETLIFY_BACKEND_URL", "\"https://auth.arvio.tv/.netlify/functions\"")
+        buildConfigField("String", "APP_ANON_KEY", "\"\"")
 
 
         // Keep release downloads ARM-universal by default. Developers can add x86
@@ -151,7 +143,7 @@ android {
         create("sideload") {
             dimension = "distribution"
             buildConfigField("Boolean", "SELF_UPDATE_ENABLED", "true")
-            buildConfigField("Boolean", "FEATURE_PLUGINS_ENABLED", "true")
+            buildConfigField("Boolean", "FEATURE_PLUGINS_ENABLED", "false")
             buildConfigField("Boolean", "AUDIO_SYNC_AVAILABLE", "true")
         }
     }
@@ -179,9 +171,11 @@ android {
 
     buildTypes {
         release {
-            // Full release optimization for TV smoothness.
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // R8 currently crashes on this codebase's Kotlin metadata during
+            // release minification. Keep release builds unminified so final
+            // Cockpit APKs can be produced reliably.
+            isMinifyEnabled = false
+            isShrinkResources = false
             // Use release signing if configured, otherwise fall back to debug
             val releaseSigningConfig = signingConfigs.findByName("release")
             signingConfig = if (releaseSigningConfig?.storeFile != null) {
@@ -213,18 +207,14 @@ android {
             buildConfigField("Boolean", "ENABLE_CRASH_REPORTING", "false")
         }
 
-        // Beta build: release-grade optimizations in a separate package so it
-        // can be tested alongside the Play Store installation.
+        // Staging build type: release-grade optimizations but signed with the
+        // debug keystore so the APK installs as an update over an existing
+        // debug build (preserves profile/IPTV/DataStore). NO applicationId
+        // suffix — it MUST resolve to the same package as debug/release.
         create("staging") {
             initWith(getByName("release"))
-            applicationIdSuffix = ".beta"
-            versionNameSuffix = "-beta"
-            val releaseSigningConfig = signingConfigs.findByName("release")
-            signingConfig = if (releaseSigningConfig?.storeFile != null) {
-                releaseSigningConfig
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            versionNameSuffix = "-rc"
+            signingConfig = signingConfigs.getByName("debug")
             isDebuggable = false
             isJniDebuggable = false
 
@@ -238,17 +228,9 @@ android {
         isCoreLibraryDesugaringEnabled = true
     }
 
-    testOptions {
-        unitTests {
-            isIncludeAndroidResources = true
-        }
-    }
-
     sourceSets {
         getByName("main") {
             java.srcDir("src/main/tdlib-java")
-            // Vendored media3 1.9.0 Matroska extractor with Dolby Vision P7 sample hooks
-            // (see dvmkv/package-info.java for the re-vendoring procedure on media3 bumps).
             java.srcDir("src/main/dvmkv-java")
             res.srcDir("src/main/res-player")
         }
@@ -258,6 +240,15 @@ android {
         compose = true
         buildConfig = true
         prefab = hasDiscordSdk
+    }
+
+    if (hasDiscordSdk) {
+        externalNativeBuild {
+            cmake {
+                path = file("src/main/cpp/CMakeLists.txt")
+                version = "3.22.1"
+            }
+        }
     }
 
     packaging {
@@ -274,15 +265,6 @@ android {
             useLegacyPackaging = false  // Required for 16KB page size support
             // sherpa-onnx's JNI library only needs libonnxruntime; its C/C++ API libraries are unused.
             excludes += setOf("lib/*/libsherpa-onnx-c-api.so", "lib/*/libsherpa-onnx-cxx-api.so")
-        }
-    }
-
-    if (hasDiscordSdk) {
-        externalNativeBuild {
-            cmake {
-                path = file("src/main/cpp/CMakeLists.txt")
-                version = "3.22.1"
-            }
         }
     }
 
@@ -327,13 +309,11 @@ ksp {
     }
 
     dependencies {
-    // Discord Partner SDK is licensed separately and intentionally not committed.
     if (hasDiscordSdk) {
         implementation(files(discordSdkAar))
     } else {
         logger.warn("Discord Partner SDK AAR not found. Discord Rich Presence will be unavailable.")
     }
-
     // Gson explicit pin to keep `JsonParser`/AST extension API stable with current sources.
     implementation("com.google.code.gson:gson:2.10.1")
 
@@ -343,8 +323,6 @@ ksp {
 
     // Core library desugaring for Java 8+ APIs
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
-
-    // Nullness annotations used by the vendored media3 Matroska extractor (src/main/dvmkv-java).
     compileOnly("org.checkerframework:checker-qual:3.43.0")
 
     // Core Android
@@ -547,7 +525,7 @@ fun localSecretValue(name: String): String {
     val secretsFile = rootProject.file("secrets.properties")
     if (secretsFile.exists()) {
         val properties = Properties()
-        secretsFile.readText(Charsets.UTF_8).removePrefix("\uFEFF").reader().use { properties.load(it) }
+        secretsFile.inputStream().use { properties.load(it) }
         properties.getProperty(name)?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
     }
     providers.gradleProperty(name).orNull?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
@@ -565,59 +543,6 @@ fun escapeBuildConfigString(value: String): String =
     value
         .replace("\\", "\\\\")
         .replace("\"", "\\\"")
-
-val validateReleaseCloudSecrets = tasks.register("validateReleaseCloudSecrets") {
-    doLast {
-        val appAnonKey = localSecretValue("APP_ANON_KEY").ifBlank { localSecretValue("SUPABASE_ANON_KEY") }
-        val supabaseUrl = localSecretValue("SUPABASE_URL")
-        val traktClientId = localSecretValue("TRAKT_CLIENT_ID")
-        val traktClientSecret = localSecretValue("TRAKT_CLIENT_SECRET")
-        val telegramApiId = localSecretValue("TELEGRAM_API_ID").toIntOrNull() ?: 0
-        val telegramApiHash = localSecretValue("TELEGRAM_API_HASH")
-        require(telegramApiId > 0 && telegramApiHash.matches(Regex("[a-fA-F0-9]{32}"))) {
-            "Release builds require valid TELEGRAM_API_ID and TELEGRAM_API_HASH values. " +
-                "Refusing to ship an official build with Telegram disabled."
-        }
-        val supabaseHost = supabaseUrl.substringAfter("://", missingDelimiterValue = "").substringBefore('/')
-        val hasValidSupabaseUrl =
-            (supabaseUrl.startsWith("https://") || supabaseUrl.startsWith("http://")) &&
-                supabaseHost.contains('.') &&
-                '*' !in supabaseUrl
-        require(hasValidSupabaseUrl) {
-            "Release builds require a valid HTTP(S) SUPABASE_URL " +
-                "(length=${supabaseUrl.length}, http=${supabaseUrl.startsWith("http")}, " +
-                "hostPresent=${supabaseHost.isNotBlank()}, hostHasDot=${supabaseHost.contains('.')}, redacted=${'*' in supabaseUrl})."
-        }
-        require(
-            appAnonKey.length > 40 &&
-                !appAnonKey.equals("your-supabase-anon-key", ignoreCase = true) &&
-                !appAnonKey.startsWith("your-", ignoreCase = true)
-        ) {
-            "Release builds require a real APP_ANON_KEY in secrets.properties, Gradle properties, or the environment."
-        }
-        require(
-            traktClientId.length > 20 &&
-                !traktClientId.startsWith("your-", ignoreCase = true) &&
-                traktClientSecret.length > 20 &&
-                !traktClientSecret.startsWith("your-", ignoreCase = true)
-        ) {
-            "Release builds require real TRAKT_CLIENT_ID and TRAKT_CLIENT_SECRET values."
-        }
-    }
-}
-
-tasks.configureEach {
-    if (name in setOf(
-            "prePlayReleaseBuild",
-            "preSideloadReleaseBuild",
-            "prePlayStagingBuild",
-            "preSideloadStagingBuild"
-        )
-    ) {
-        dependsOn(validateReleaseCloudSecrets)
-    }
-}
-
 
 detekt {
     // Configuration file

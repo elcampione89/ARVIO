@@ -1,69 +1,12 @@
-
-<div align="center">
-
-  <img src="web/public/arvio-logo.svg" alt="ARVIO" width="150" />
-
-  <br />
-
-  <p>A modern, open-source media hub for Android TV, phones, tablets, and the web.</p>
-
-  <p>
-    Browse your own media sources with a unified experience across your devices.
-  </p>
-
-  <p>
-    <a href="https://github.com/ProdigyV21/ARVIO">GitHub</a>
-    ·
-    <a href="https://github.com/ProdigyV21/ARVIO/releases">Releases</a>
-    ·
-    <a href="https://web.arvio.tv">ARVIO Web</a>
-  </p>
-
-  <br />
-
-  <img src="https://img.shields.io/github/v/release/ProdigyV21/ARVIO?style=for-the-badge&logo=github" alt="Latest Version" />
-  <img src="https://img.shields.io/github/downloads/ProdigyV21/ARVIO/total?style=for-the-badge&logo=github" alt="Downloads" />
-  <img src="https://img.shields.io/github/stars/ProdigyV21/ARVIO?style=for-the-badge&logo=github" alt="Stars" />
-  <img src="https://img.shields.io/github/license/ProdigyV21/ARVIO?style=for-the-badge" alt="License" />
-
-  <br />
-
-  <img src="https://img.shields.io/badge/Android-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android" />
-  <img src="https://img.shields.io/badge/Kotlin-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white" alt="Kotlin" />
-  <img src="https://img.shields.io/badge/Jetpack%20Compose-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" />
-
-  <br />
-  <br />
-
-  <a href="https://web.arvio.tv"><img src="https://img.shields.io/badge/ARVIO-Web%20App-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="ARVIO Web App" /></a>
-
-  <br />
-  <br />
-
-  <a href="https://trendshift.io/repositories/28671?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-28671" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/28671/weekly?language=Kotlin" alt="ProdigyV21/ARVIO | Trendshift" width="250" height="55" /></a>
-
-
-</div>
-
-
-
----
-
 # ARVIO
 
 ARVIO is an Android media hub for TV, phone, and tablet form factors. This repository is maintained as a source-code and development mirror for the Android application.
 
+This branch is the Cockpit-managed ARVIO build. It keeps the upstream ARVIO client base, but replaces the public account flow with Cockpit Arvio panel authentication and panel-managed IPTV/service provisioning.
+
 The app provides a media browser, player shell, profile support, optional cloud sync, IPTV playlist support, catalog configuration, home-server integrations, and integrations with user-configured sources. ARVIO does not host, store, sell, or distribute movies, series, live TV channels, playlists, streams, or other third-party media.
 
-## Self-Host ARVIO Web
-
-The webapp can run on your own computer or server **without an ARVIO Premium subscription**, using your own TMDB, Trakt, Simkl and other integration credentials. The paid hosted webapp is optional.
-
-Start with the [webapp setup guide](web/README.md): it includes Node.js and Docker Compose instructions, a self-hosted environment template, and a configuration checker. See [self-hosting details](web/docs/SELF-HOSTING.md) for security, updates and limitations. Local profiles are stored per browser; this setup does not provide cross-device ARVIO Cloud sync.
-
 ## Repository Purpose
-
-
 
 This GitHub repository is for:
 
@@ -78,6 +21,8 @@ It is not intended as an advertising page, download landing page, or content dis
 ## Features
 
 - Android TV, Fire TV, phone, and tablet UI
+- Cockpit Arvio Xtream Codes login with panel-provided service selection
+- Panel-managed IPTV playlist provisioning after login
 - TMDB-powered movie, series, cast, collection, franchise, and metadata browsing
 - IPTV M3U/Xtream playlist support with provider categories, favorites, hidden categories, EPG, and mobile/tablet fullscreen playback
 - Optional ARVIO Cloud sync for profiles, settings, catalogs, IPTV state, watch state, and custom profile avatars
@@ -91,29 +36,34 @@ It is not intended as an advertising page, download landing page, or content dis
 - Profile PINs and custom profile avatars
 - ExoPlayer/Media3 playback with TV remote, mobile, and tablet controls
 
+## Cockpit Mod Notes
+
+This distribution is wired for a Cockpit Arvio module:
+
+- Cockpit API base: `https://blacksheep.lol/HeavyMetal/api/arvio/`
+- Users sign in with Xtream Codes credentials issued by Cockpit.
+- Services/portals are loaded from the Cockpit panel instead of being manually entered as raw service URLs.
+- Login creates the client-side IPTV configuration from the selected Cockpit-managed service and Xtream credentials.
+- IPTV add/edit UI hides raw service and EPG URLs where possible so provider URLs are not exposed in normal settings screens.
+- TMDB direct-call credentials are intentionally hardcoded for this mod build.
+- Sideload plugin runtime receives the same TMDB key/token through `TMDB_API_KEY` and `TMDB_READ_ACCESS_TOKEN`.
+
+When pulling upstream ARVIO changes, preserve the Cockpit integration points in:
+
+- `app/src/main/kotlin/com/arflix/tv/data/api/CockpitArvioApi.kt`
+- `app/src/main/kotlin/com/arflix/tv/data/api/CockpitArvioModels.kt`
+- `app/src/main/kotlin/com/arflix/tv/data/repository/AuthRepository.kt`
+- `app/src/main/kotlin/com/arflix/tv/ui/screens/login/`
+- `app/src/main/kotlin/com/arflix/tv/ui/screens/settings/`
+- `app/src/main/kotlin/com/arflix/tv/util/Constants.kt`
+- `app/src/main/kotlin/com/arflix/tv/updater/AppUpdateRepository.kt`
+
 
 ## Availability
 
-ARVIO is available across official app stores, direct GitHub releases, and Obtainium:
+ARVIO is available on Google Play:
 
-<p align="left">
-  <a href="https://play.google.com/store/apps/details?id=com.arvio.tv"><img src="assets/badges/badge_google_play.png" alt="Get it on Google Play" width="160"></a>
-  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/ProdigyV21/ARVIO"><img src="assets/badges/badge_obtainium.png" alt="Get it on Obtainium" width="160"></a>
-  <a href="https://github.com/ProdigyV21/ARVIO/releases/latest"><img src="assets/badges/badge_github.png" alt="Get it on GitHub" width="160"></a>
-</p>
-
-### Obtainium (Recommended for Sideloading)
-Install and automatically receive updates directly from GitHub Releases using [Obtainium](https://github.com/ImranR98/Obtainium):
-
-- **1-Click Add:** Click the **Get it on Obtainium** badge above or open [`obtainium://add/https://github.com/ProdigyV21/ARVIO`](obtainium://add/https://github.com/ProdigyV21/ARVIO) on your Android device.
-- **Manual App Source URL:** `https://github.com/ProdigyV21/ARVIO`
-- See [Obtainium Setup Guide](docs/distribution/OBTAINIUM.md) for pre-configured JSON import and APK filtering details.
-
-### Direct GitHub Releases
-Signed APKs (`ARVIO-v*-sideload-release.apk`) and checksums (`SHA256SUMS.txt`) are published on [GitHub Releases](https://github.com/ProdigyV21/ARVIO/releases/latest).
-
-
-
+[<img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get it on Google Play" width="160">](https://play.google.com/store/apps/details?id=com.arvio.tv)
 
 ## Support ARVIO
 
@@ -121,71 +71,31 @@ ARVIO is a free hobby project built and maintained with a lot of time, testing, 
 
 If ARVIO helps you and you want to support development, donations are appreciated:
 
-[Support ARVIO on Ko-fi](https://ko-fi.com/arvio/tiers)
+[Support ARVIO on Ko-fi](https://ko-fi.com/arvio)
 
 ## Screenshots
 
-ARVIO 2.0 across TV, phones, tablets and the web. Select an image to view it in full, or explore the [complete screenshot gallery](https://arvio.tv/#screens).
-
-### Android TV
-
 | Home | Details |
-|---|---|
-| ![ARVIO 2.0 tv · Home](netlify-arvio-tv-site/assets/screenshots-v2/tv/01-home.webp) | ![ARVIO 2.0 tv · Details](netlify-arvio-tv-site/assets/screenshots-v2/tv/02-details.webp) |
+|------|---------|
+| ![Home screen](screenshots/home_v190.png) | ![Details screen](screenshots/details_v190.png) |
 
-| Library | Homeserver |
-|---|---|
-| ![ARVIO 2.0 tv · Library](netlify-arvio-tv-site/assets/screenshots-v2/tv/03-library.webp) | ![ARVIO 2.0 tv · Homeserver](netlify-arvio-tv-site/assets/screenshots-v2/tv/04-homeserver.webp) |
+| Live TV | Collections |
+|---------|-------------|
+| ![Live TV screen](screenshots/live_tv_v1991.png) | ![Collections screen](screenshots/collections_v1991.png) |
 
-| Live TV | Sports |
-|---|---|
-| ![ARVIO 2.0 tv · Live TV](netlify-arvio-tv-site/assets/screenshots-v2/tv/05-tv.webp) | ![ARVIO 2.0 tv · Sports](netlify-arvio-tv-site/assets/screenshots-v2/tv/06-sports.webp) |
-
-### Mobile
-
-| Home | Library | Live TV |
-|---|---|---|
-| ![ARVIO 2.0 mobile · Home](netlify-arvio-tv-site/assets/screenshots-v2/phone/01-home.webp) | ![ARVIO 2.0 mobile · Library](netlify-arvio-tv-site/assets/screenshots-v2/phone/03-library.webp) | ![ARVIO 2.0 mobile · Live TV](netlify-arvio-tv-site/assets/screenshots-v2/phone/05-tv.webp) |
-
-### Tablet · Landscape
-
-| Home | Service collections |
-|---|---|
-| ![ARVIO 2.0 tablet · Home](netlify-arvio-tv-site/assets/screenshots-v2/tablet/01-home.webp) | ![ARVIO 2.0 tablet · Service collections](netlify-arvio-tv-site/assets/screenshots-v2/tablet/07-services.webp) |
-
-Phone and tablet captures use demonstration libraries and channels.
-
-### ARVIO Web — iPhone, iPad & any browser
-
-Use ARVIO in your browser at [web.arvio.tv](https://web.arvio.tv), with optional ARVIO Cloud sync for profiles, watchlists and progress. You can also [self-host the web app](web/README.md). The captures below show the desktop browser layout.
-
-| Home | Details |
-|---|---|
-| ![ARVIO 2.0 web · Home](netlify-arvio-tv-site/assets/screenshots-v2/web/01-home.webp) | ![ARVIO 2.0 web · Details](netlify-arvio-tv-site/assets/screenshots-v2/web/02-details.webp) |
-
-| Library | Service collections |
-|---|---|
-| ![ARVIO 2.0 web · Library](netlify-arvio-tv-site/assets/screenshots-v2/web/03-library.webp) | ![ARVIO 2.0 web · Service collections](netlify-arvio-tv-site/assets/screenshots-v2/web/07-services.webp) |
-
-Screenshots show connected sources and example setups. ARVIO includes no media or subscriptions.
+| Mobile | Profiles |
+|--------|----------|
+| ![Mobile screen](screenshots/mobile_home.webp) | ![Profiles screen](screenshots/profiles_v1991.png) |
 
 ## Content And Source Policy
 
 ARVIO is a media browser and player interface for user-configured sources. It works like a media player or browser: users provide their own services, playlists, addons, and URLs.
 
-ARVIO does not supply a film, TV or live-channel subscription. Playback sources must be configured by the user. Catalog metadata and artwork do not grant viewing rights. Use only services and media you are authorized to access.
+This repository does not include hosted media content, bundled playlists, IPTV credentials, debrid accounts, third-party streaming catalogs, or links intended to enable unauthorized access to content. No movies, series, live TV channels, playlists, or other third-party media are hosted by this repository or by ARVIO.
 
-We review reports concerning material and links controlled by ARVIO. See [copyright reporting](COPYRIGHT.md) for how to contact us. Material hosted by an independent provider may also need to be reported to that provider; this does not prevent reporting an ARVIO-controlled link or asset to us.
+Users are solely responsible for their usage and must comply with applicable local laws. If you believe content accessed through an external source violates copyright law, contact the actual file host, service provider, or source maintainer. The ARVIO repository and developers cannot remove content hosted by third parties.
 
-Contributors must not submit media without appropriate permission, credentials, private keys, access tokens, or links intended to enable unauthorized access to content. Public demonstration assets require documented permission, not just an API URL.
-
-### Metadata Credits
-
-<img src="app/src/main/assets/tmdb-logo.svg" alt="TMDB" width="100">
-
-This product uses the TMDB API but is not endorsed or certified by TMDB.
-
-TMDB attribution does not establish rights to every image. Commercial uses of TMDB require the applicable agreement. Other services and trademarks belong to their respective owners; integration does not imply endorsement.
+Contributors should not submit copyrighted media, credentials, private keys, access tokens, or links intended to enable unauthorized access to content.
 
 ## Cloud Sync
 
@@ -213,9 +123,6 @@ On Windows PowerShell or Command Prompt:
 .\gradlew.bat :app:assembleSideloadDebug
 ```
 
-APK builds include 32-bit and 64-bit ARM by default. For an x86/x86_64 emulator,
-add `-PincludeX86Abis=true` to the Gradle command.
-
 Install a debug build on a connected Android TV, Fire TV, emulator, phone, or tablet:
 
 ```bash
@@ -235,43 +142,14 @@ Build variants:
 - `play`: Play Store build, self-update disabled.
 - `sideload`: Direct APK build, self-update enabled.
 - `debug`: development build.
-- `staging`: release-like build signed with the debug keystore for upgrade testing.
-- `release`: production build. Use a private release keystore for distribution.
+- `staging`: release-like build signed with the default Android debug keystore.
+- `release`: optimized build signed with a private release keystore when `keystore.properties` exists, otherwise signed with the default Android debug keystore.
 
 ## Local Configuration
 
-Cloud sync, Google sign-in, and Supabase-backed auth require local secrets. Copy the defaults file and fill in real values:
+This Cockpit build bypasses normal Supabase sign-in for the primary login flow. TMDB credentials are hardcoded in the app constants so metadata and plugin flows work without Supabase proxy configuration.
 
-```bash
-cp secrets.defaults.properties secrets.properties
-```
-
-`secrets.properties` is ignored and must not be committed.
-
-Discord Rich Presence is optional and requires Discord's separately licensed
-Android Partner SDK. Place the approved file at
-`app/libs/discord_partner_sdk.aar` and set `DISCORD_CLIENT_ID` in
-`secrets.properties`. Builds without that AAR remain valid, but show Discord as
-unavailable instead of compiling a simulated connection. Do not commit or
-redistribute the AAR unless your Discord SDK agreement explicitly permits it.
-Trusted signed builds restore the AAR from the private
-`ProdigyV21/ARVIO-private-dependencies` repository through a read-only deploy
-key stored as the `DISCORD_SDK_DEPLOY_KEY` repository secret.
-
-TMDB and Trakt credentials are not committed to the repository. When a valid
-Supabase config is present, app requests are routed through the tracked
-`tmdb-proxy` and `trakt-proxy` Edge Functions, where those credentials should be
-stored as Supabase function secrets. Forks that do not use those proxy functions
-can still add their own local `TMDB_API_KEY`, `TRAKT_CLIENT_ID`, and
-`TRAKT_CLIENT_SECRET` values in `secrets.properties` for direct local testing.
-
-For signed release builds, copy the keystore template and fill in local signing values:
-
-```bash
-cp keystore.properties.template keystore.properties
-```
-
-`keystore.properties` and keystore files are ignored and must stay private.
+The upstream `secrets.properties` and `keystore.properties` hooks are still supported, but they are optional for this branch. If no release keystore is configured, release and staging APKs use the default Android debug keystore.
 
 ## Release Checks
 
@@ -284,6 +162,18 @@ Before publishing a build, run:
 ```
 
 Smoke-test startup, profile switching, playback, stream fallback, subtitle/audio switching, IPTV/EPG loading, addon add/remove, search, settings navigation, background sync, and repeated player open/close on the supported device classes.
+
+## GitHub Maintenance
+
+The repository includes GitHub Actions for:
+
+- Pull request build verification.
+- Manual upstream sync PR creation.
+- Manual or tagged APK release creation.
+
+Use **Actions -> Sync Upstream** to fetch an upstream repository/branch into a `sync/upstream-*` branch and open a PR. Resolve conflicts in that PR while preserving the Cockpit mod points listed above.
+
+Use **Actions -> Build APK Release** to build and publish APK artifacts. The Cockpit branch does not require repository secrets for the standard APK build; GitHub Actions will use the checked-in defaults and Gradle's default debug signing fallback.
 
 ## Privacy
 

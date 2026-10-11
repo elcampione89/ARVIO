@@ -2632,7 +2632,27 @@ fun SettingsScreen(
                     }
                 }
             } else {
-                ResolvedIptvSource(IptvSourceType.M3U, "", "", "")
+                // Cockpit panel: new playlists default to the panel-managed service
+                // and the credentials the user signed in with.
+                val panelPortalUrl = uiState.portals.firstOrNull()?.url?.trim()?.trimEnd('/').orEmpty()
+                if (panelPortalUrl.isNotBlank()) {
+                    ResolvedIptvSource(
+                        IptvSourceType.XTREAM,
+                        panelPortalUrl,
+                        uiState.iptvLoginUsername,
+                        uiState.iptvLoginPassword
+                    )
+                } else {
+                    ResolvedIptvSource(IptvSourceType.M3U, "", "", "")
+                }
+            }.let { resolved ->
+                // A playlist saved against the panel API address is re-pointed at the panel service.
+                val panelPortalUrl = uiState.portals.firstOrNull()?.url?.trim()?.trimEnd('/').orEmpty()
+                if (panelPortalUrl.isNotBlank() && resolved.url.contains("/api/arvio", ignoreCase = true)) {
+                    resolved.copy(url = panelPortalUrl)
+                } else {
+                    resolved
+                }
             }
 
             val resolvedEpg = editingPlaylist?.settingsEpgInput().orEmpty()
