@@ -84,6 +84,8 @@ data class TvUiState(
     val epgWarning: String? = null,
     val loadingMessage: String? = null,
     val loadingPercent: Int = 0,
+    /** True until the saved channel list has been read at startup; the TV page shows a loader meanwhile. */
+    val channelsStartupPending: Boolean = true,
     val config: IptvConfig = IptvConfig(),
     val snapshot: IptvSnapshot = IptvSnapshot(),
     val channelLookup: Map<String, IptvChannel> = emptyMap(),
@@ -330,8 +332,8 @@ class TvViewModel @Inject constructor(
                 val epgAgeMs = iptvRepository.cachedEpgAgeMs()
                 if (needsChannelReload) {
                     // Only situation that still requires a blocking refresh:
-                    // there are literally no channels to show.
-                    refresh(force = true, showLoading = false, forceEpg = false)
+                    // there are literally no channels to show, so show progress.
+                    refresh(force = true, showLoading = true, forceEpg = false)
                 } else {
                     // In every other case render the warm cache instantly —
                     // never block the TV page on EPG. The active category
@@ -344,7 +346,8 @@ class TvViewModel @Inject constructor(
                     }
                 }
                 } else {
-                    refresh(force = false, showLoading = false, forceEpg = false)
+                    // Nothing saved yet (first run, or a new line): download with progress shown.
+                    refresh(force = false, showLoading = true, forceEpg = false)
                 }
                 startPeriodicEpgRefresh()
             } finally {
@@ -352,6 +355,9 @@ class TvViewModel @Inject constructor(
                 // Until the initial read finishes, an empty in-memory snapshot is
                 // expected and must not launch a second load of the same 50k store.
                 initialCacheLoadComplete = true
+                if (_uiState.value.channelsStartupPending) {
+                    setUiState(_uiState.value.copy(channelsStartupPending = false))
+                }
             }
         }
     }

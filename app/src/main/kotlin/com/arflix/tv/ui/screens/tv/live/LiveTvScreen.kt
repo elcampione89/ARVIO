@@ -3908,6 +3908,15 @@ fun LiveTvScreen(
             if (isFullScreen) {
                 // Full-screen playback only — no grid rendered so the single
                 // PlayerView owns ExoPlayer.
+            } else if (
+                state.isConfigured && state.snapshot.channels.isEmpty() && state.error == null &&
+                (state.isLoading || state.channelsStartupPending)
+            ) {
+                // Reading the saved list or downloading it: say so instead of an empty screen.
+                LoadingPane(
+                    message = state.loadingMessage?.takeIf { it.isNotBlank() } ?: "Loading channels…",
+                    percent = state.loadingPercent
+                )
             } else if (!state.isConfigured && state.snapshot.channels.isEmpty() && sportsAddonInstallations.isEmpty()) {
             EmptyStatePane(
                 message = stringResource(R.string.live_empty_no_playlist),
