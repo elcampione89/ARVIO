@@ -12,8 +12,12 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  */
 object LiveTvGuideSources {
 
-    /** Channel count above which a playlist takes the paged/low-work code paths. */
-    const val LARGE_LIST_CHANNEL_COUNT: Int = 10_000
+    /**
+     * Channel count above which a playlist takes the paged/low-work code paths
+     * (saved categories first, channels read on demand). Lowered from 10,000 so
+     * typical ~10k IPTV lines open quickly. Keep in step with IptvRepository.
+     */
+    const val LARGE_LIST_CHANNEL_COUNT: Int = 3_000
 
     /**
      * Explicit guides and standard Xtream logins both provide an XMLTV endpoint.

@@ -61,7 +61,9 @@ internal const val FAVORITES_GROUP_NAME = "My Favorites"
 private const val StalkerStreamCacheTtlMs = 60_000L
 private const val EpgLoadingStateLimit = 800
 private const val EpgAttemptedStateLimit = 2_400
-private const val LargeIptvListChannelCount = 10_000
+// Lists above this use the paged start-up (saved categories + first channels, rest on demand).
+// Lowered from 10,000 so typical ~10k IPTV lines open without reading every channel first.
+private const val LargeIptvListChannelCount = com.arflix.tv.ui.screens.tv.live.LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT
 private const val StandardPriorityEpgLimit = 3_200
 private const val BackgroundShortEpgWarmupLimit = 24
 private const val LargeListPriorityCacheLimit = 360
@@ -864,7 +866,7 @@ class TvViewModel @Inject constructor(
     private fun isActiveLargeIptvList(): Boolean {
         val snapshotCount = _uiState.value.snapshot.channels.size
         if (isLargeIptvList(snapshotCount)) return true
-        return try { iptvRepository.pagedChannelStoreCount() > 10_000 } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; false }
+        return try { iptvRepository.pagedChannelStoreCount() > LargeIptvListChannelCount } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; false }
     }
 
     /**
@@ -876,7 +878,7 @@ class TvViewModel @Inject constructor(
         if (id.isBlank()) return null
         return withContext(Dispatchers.IO) {
             if (isLargeIptvList(state.snapshot.channels.size) ||
-                try { iptvRepository.pagedChannelStoreCount() > 10_000 } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; false }
+                try { iptvRepository.pagedChannelStoreCount() > LargeIptvListChannelCount } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; false }
             ) {
                 iptvRepository.pagedChannelsByIds(listOf(id)).firstOrNull()
             } else {

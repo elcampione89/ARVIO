@@ -166,7 +166,9 @@ private object IptvIdSentinels {
     fun isReal(tmdb: Int): Boolean = tmdb > 0
 }
 
-private const val LargeIptvListChannelCount = 10_000
+// Lists above this use the paged start-up (saved categories + first channels, rest on demand).
+// Lowered from 10,000 so typical ~10k IPTV lines open without reading every channel first.
+private const val LargeIptvListChannelCount = 3_000
 private const val LargeListMemoryChannelLimit = 240
 private const val LargeListMemoryGuideLimit = 512
 private const val LargeListMemoryFavoriteGuideLimit = 256

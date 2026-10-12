@@ -669,7 +669,7 @@ fun LiveTvScreen(
         // store to finish indexing. The upgrade poll below used to hold even a
         // complete small playlist for 20 x 250 ms, leaving the guide empty for
         // five seconds despite all channels already being cached.
-        if (snapshot.isNotEmpty() && pagedTotal <= 10_000) {
+        if (snapshot.isNotEmpty() && pagedTotal <= LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT) {
             val fastValue = withContext(Dispatchers.Default) {
                 buildFastStartupChannelState(
                     channels = snapshot,
@@ -681,9 +681,9 @@ fun LiveTvScreen(
             }
             enrichedState.value = fastValue
         }
-        if (snapshot.size in 1..500 && pagedTotal <= 10_000) {
+        if (snapshot.size in 1..500 && pagedTotal <= LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT) {
             var attempt = 0
-            while (attempt < 20 && pagedTotal <= 10_000) {
+            while (attempt < 20 && pagedTotal <= LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT) {
                 delay(250L)
                 pagedTotal = withContext(Dispatchers.IO) {
                     if (viewModel.iptvRepository.pagedChannelsReady()) {
@@ -692,15 +692,15 @@ fun LiveTvScreen(
                         0
                     }
                 }
-                if (pagedTotal > 10_000) {
+                if (pagedTotal > LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT) {
                     System.err.println("[IPTV-PagedUI] paged store became ready after ${attempt + 1} checks total=$pagedTotal snapshot=${snapshot.size}")
                 }
                 attempt++
             }
         }
-        if (pagedTotal > 10_000) {
+        if (pagedTotal > LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT) {
             lastKnownPagedTotal = pagedTotal
-        } else if (lastKnownPagedTotal > 10_000) {
+        } else if (lastKnownPagedTotal > LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT) {
             // The paged channel store can briefly report "not ready" during a
             // category switch even though the full IPTV index was already shown.
             // Do not let that transient state collapse the guide back to the
@@ -709,7 +709,7 @@ fun LiveTvScreen(
             pagedTotal = lastKnownPagedTotal
         }
         System.err.println("[IPTV-PagedUI] snapshot=${snapshot.size} pagedTotal=$pagedTotal loadedLimit=$pagedLoadedLimit")
-        if (pagedTotal > 10_000) {
+        if (pagedTotal > LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT) {
             val storeRevision = withContext(Dispatchers.IO) {
                 viewModel.iptvRepository.pagedChannelStoreUpdatedAtMs()
             }
@@ -804,7 +804,7 @@ fun LiveTvScreen(
             )
         }
         enrichedState.value = initialValue
-        if (snapshot.size > 10_000) {
+        if (snapshot.size > LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT) {
             viewModel.cachedEnrichedChannels = initialValue
             viewModel.cachedChannelsSignature = signature
             return@LaunchedEffect
@@ -931,7 +931,7 @@ fun LiveTvScreen(
     }
     LaunchedEffect(currentProfile?.id, enrichedState.value.all, favoriteOrderIds, recents.value, hiddenGroupSet,
         restrictedGroupSet, selectedProviderId, state.config, lastKnownPagedTotal, state.snapshot.loadedAt) {
-        val candidates = if (lastKnownPagedTotal > 10_000) withContext(Dispatchers.IO) {
+        val candidates = if (lastKnownPagedTotal > LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT) withContext(Dispatchers.IO) {
             viewModel.iptvRepository.pagedChannelsByIds((favoriteOrderIds + recents.value).distinct())
                 .mapIndexed { index, channel -> channel.enrichForFastStartup(index + 1) }
         } else enrichedState.value.all
@@ -1151,12 +1151,12 @@ fun LiveTvScreen(
         } else {
             pagedLoadedLimit
         }
-        val expectedWindowSize = if (selectedCategoryId == "all" && (categoryCount <= 10_000 && lastKnownPagedTotal <= 10_000)) {
+        val expectedWindowSize = if (selectedCategoryId == "all" && (categoryCount <= LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT && lastKnownPagedTotal <= LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT)) {
             categoryCount
         } else {
             minOf(categoryCount, targetPageLimit).coerceAtLeast(0)
         }
-        val effectivePageLimit = if (selectedCategoryId == "all" && (categoryCount <= 10_000 && lastKnownPagedTotal <= 10_000)) {
+        val effectivePageLimit = if (selectedCategoryId == "all" && (categoryCount <= LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT && lastKnownPagedTotal <= LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT)) {
             categoryCount
         } else {
             targetPageLimit
@@ -1775,7 +1775,7 @@ fun LiveTvScreen(
             }
         }
     }
-    val isLargePagedGuide = lastKnownPagedTotal > 10_000 || state.snapshot.channels.size > 10_000
+    val isLargePagedGuide = lastKnownPagedTotal > LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT || state.snapshot.channels.size > LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT
     val indexedVisibleGuideReady = remember(isLargePagedGuide, indexedGuideLoadedIds, guideChannelIds) {
         !isLargePagedGuide || indexedGuideLoadedIds.containsAll(guideChannelIds)
     }
@@ -2078,7 +2078,7 @@ fun LiveTvScreen(
                     if (!shouldWaitForSportsGuide(
                             indexedGuideChannelCount = indexedIds.size,
                             inMemoryGuideChannelCount = inMemoryGuideCount,
-                            largePlaylist = state.snapshot.channels.size > 10_000,
+                            largePlaylist = state.snapshot.channels.size > LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT,
                         )) {
                         guideReady = true
                         break
