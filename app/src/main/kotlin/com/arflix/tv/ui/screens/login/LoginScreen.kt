@@ -268,7 +268,7 @@ fun LoginScreen(
                     },
                     text = when {
                         uiState.isLoadingPortals -> "Loading services..."
-                        selectedPortal != null -> selectedPortal.name.ifBlank { selectedPortal.url }
+                        selectedPortal != null -> selectedPortal.name.ifBlank { "Service ${selectedPortalIndex + 1}" }
                         else -> "No services available"
                     },
                     isPrimary = false,
