@@ -9,6 +9,11 @@ object Constants {
     // Cockpit Arvio module URL
     const val COCKPIT_API_URL = com.arflix.tv.BuildConfig.PANEL_API_URL
 
+    // Settings sections hidden from users because they expose hosted addon
+    // links or IPTV server details. The Cockpit panel still configures them.
+    // Remove an entry here to show that section again.
+    val HIDDEN_SETTINGS_SECTIONS: Set<String> = setOf("stream_integrations", "stremio", "iptv")
+
     // Supabase - keys from BuildConfig (secrets.properties).
     val SUPABASE_URL: String get() = BuildConfig.SUPABASE_URL
     val SUPABASE_ANON_KEY: String get() = BuildConfig.SUPABASE_ANON_KEY

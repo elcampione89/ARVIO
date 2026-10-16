@@ -577,7 +577,7 @@ fun SettingsScreen(
             }
             add("appearance")
             add("network")
-        }
+        }.filterNot { it in Constants.HIDDEN_SETTINGS_SECTIONS }
     }
 
     val initialSectionIdx = remember(initialSection, sections) {
@@ -5469,6 +5469,13 @@ private fun MobileSettingsMainPage(
                     add("Catalogs" to Icons.Default.Widgets)
                     add("TV" to Icons.Default.LiveTv)
                     add("Home Server" to Icons.Default.Cloud)
+                }.filterNot { (name, _) ->
+                    when (name) {
+                        "Stream Integrations" -> "stream_integrations" in Constants.HIDDEN_SETTINGS_SECTIONS
+                        "Addons" -> "stremio" in Constants.HIDDEN_SETTINGS_SECTIONS
+                        "TV" -> "iptv" in Constants.HIDDEN_SETTINGS_SECTIONS
+                        else -> false
+                    }
                 }
                 categories.forEachIndexed { index, (name, icon) ->
                     Column {
@@ -5514,7 +5521,7 @@ private fun MobileSettingsMainPage(
                     isFocused = false,
                     onClick = { onNavigate("Tracking Integrations") }
                 )
-                MobileSettingsRow(
+                if ("stream_integrations" !in Constants.HIDDEN_SETTINGS_SECTIONS) MobileSettingsRow(
                     iconRes = R.drawable.ic_telegram,
                     title = "Telegram",
                     value = "",
