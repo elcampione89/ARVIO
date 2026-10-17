@@ -2,14 +2,14 @@ name: Build APK Release
 
 on:
   push:
-    branches: [main]
+    branches: [panel-v2]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-apk-main
+  group: release-apk-panel-v2
   cancel-in-progress: false
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: panel-v2
           fetch-depth: 0
 
       - name: Read app version
@@ -41,7 +41,7 @@ jobs:
             echo "code=$version_code"
             echo "sha=$commit_sha"
             echo "short_sha=$short_sha"
-            echo "tag=cockpit-v$version_name-$short_sha"
+            echo "tag=arvio-v2-$version_name-$short_sha"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check release tag
@@ -127,6 +127,6 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             release-artifacts/* \
             --target "${{ steps.version.outputs.sha }}" \
-            --title "ARVIO ${{ steps.version.outputs.name }} Cockpit (${{ steps.version.outputs.short_sha }})" \
+            --title "Arvio v2 ${{ steps.version.outputs.name }} (${{ steps.version.outputs.short_sha }})" \
             --generate-notes \
             --latest
