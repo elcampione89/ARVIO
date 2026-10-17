@@ -94,7 +94,9 @@ jobs:
         run: |
           apk="app/build/outputs/apk/sideload/release/app-sideload-release.apk"
           unzip -l "$apk" > "$RUNNER_TEMP/arvio-apk-entries.txt"
-          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+          # ARM covers Fire TV, Android TV boxes and phones. x86 is only added
+          # with -PincludeX86Abis=true for emulators, so it is not required here.
+          for abi in armeabi-v7a arm64-v8a; do
             grep -q "lib/$abi/" "$RUNNER_TEMP/arvio-apk-entries.txt" || {
               echo "Universal APK is missing ABI: $abi" >&2
               exit 1
