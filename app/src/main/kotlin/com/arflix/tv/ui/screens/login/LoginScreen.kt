@@ -268,7 +268,7 @@ fun LoginScreen(
                     },
                     text = when {
                         uiState.isLoadingPortals -> "Loading services..."
-                        selectedPortal != null -> selectedPortal.name.ifBlank { "Service ${selectedPortalIndex + 1}" }
+                        selectedPortal != null -> selectedPortal.name.orEmpty().ifBlank { "Service ${selectedPortalIndex + 1}" }
                         else -> "No services available"
                     },
                     isPrimary = false,
@@ -342,7 +342,7 @@ fun LoginScreen(
                 // Sign In button
                 GradientButton(
                     onClick = {
-                        viewModel.signIn(username, password, selectedPortal?.url.orEmpty())
+                        viewModel.signIn(username, password, selectedPortal?.url.orEmpty(), selectedPortal?.id)
                     },
                     text = if (uiState.isLoading) "Connecting..." else "Connect",
                     isPrimary = true,

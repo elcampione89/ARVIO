@@ -8,7 +8,9 @@ data class ArvioLoginRequest(
     @SerializedName("password") val password: String,
     @SerializedName("device_name") val deviceName: String = "Android TV",
     @SerializedName("server_url") val serverUrl: String = "",
-    @SerializedName("device_id") val deviceId: String = ""
+    @SerializedName("device_id") val deviceId: String = "",
+    /** The chosen TV service's id; lets the panel keep server addresses private. */
+    @SerializedName("server_id") val serverId: Int? = null
 )
 
 data class ArvioUser(
@@ -34,8 +36,9 @@ data class ArvioLoginResponse(
 
 data class ArvioPortal(
     @SerializedName("id") val id: Int,
-    @SerializedName("name") val name: String,
-    @SerializedName("url") val url: String
+    @SerializedName("name") val name: String? = null,
+    /** Empty when the panel hides server addresses; the app then signs in with [id]. */
+    @SerializedName("url") val url: String? = null
 )
 
 data class ArvioPortalsResponse(

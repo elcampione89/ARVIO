@@ -318,7 +318,7 @@ class AuthRepository @Inject constructor(
         }
     }
 
-    suspend fun signIn(username: String, password: String, serverUrl: String = ""): Result<Unit> {
+    suspend fun signIn(username: String, password: String, serverUrl: String = "", serverId: Int? = null): Result<Unit> {
         if (username.isBlank() || password.isBlank()) {
             val msg = "Username and password are required"
             _authState.value = AuthState.Error(msg)
@@ -334,7 +334,8 @@ class AuthRepository @Inject constructor(
                     password = password,
                     deviceName = deviceName(),
                     serverUrl = serverUrl.trim(),
-                    deviceId = deviceId()
+                    deviceId = deviceId(),
+                    serverId = serverId
                 )
             )
 

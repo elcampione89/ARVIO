@@ -54,10 +54,10 @@ class LoginViewModel @Inject constructor(
         loadPortals()
     }
 
-    fun signIn(username: String, password: String, serverUrl: String) {
+    fun signIn(username: String, password: String, serverUrl: String, serverId: Int? = null) {
         val trimmedUsername = username.trim()
         val trimmedServerUrl = serverUrl.trim()
-        if (trimmedServerUrl.isBlank()) {
+        if (trimmedServerUrl.isBlank() && (serverId == null || serverId <= 0)) {
             _uiState.update { it.copy(error = "Please select a service") }
             return
         }
@@ -73,7 +73,7 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
 
-            val result = authRepository.signIn(trimmedUsername, password, trimmedServerUrl)
+            val result = authRepository.signIn(trimmedUsername, password, trimmedServerUrl, serverId)
 
             if (result.isSuccess) {
                 try {
