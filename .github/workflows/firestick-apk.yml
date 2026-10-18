@@ -4,6 +4,12 @@ name: Add Firestick APK to a release
 # that release. No rebuild: same app, same version, same signing key. New builds from
 # release-apk.yml include it automatically; this is for releases made before that.
 on:
+  # Runs for the latest release when this file changes on panel-v2 (the Run button only
+  # works for workflows on the default branch).
+  push:
+    branches: [panel-v2]
+    paths:
+      - ".github/workflows/firestick-apk.yml"
   workflow_dispatch:
     inputs:
       tag:
