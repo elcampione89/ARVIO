@@ -22,9 +22,14 @@ object PanelKeys {
 
     /** Call once from Application.attachBaseContext, before any repository is created. */
     fun init(context: Context) {
-        val p = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        prefs = p
-        cache = parse(p.getString(KEY_VALUES, null))
+        // applicationContext is still null inside Application.attachBaseContext (see
+        // OkHttpProvider.init), so fall back to the context itself: it is the Application.
+        // Never let a bad saved value stop the app from starting: the built-in keys still work.
+        runCatching {
+            val p = (context.applicationContext ?: context).getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            prefs = p
+            cache = parse(p.getString(KEY_VALUES, null))
+        }
     }
 
     /** The panel's value for [name], or null when the panel did not set one. */

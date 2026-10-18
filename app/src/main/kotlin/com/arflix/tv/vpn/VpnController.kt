@@ -85,7 +85,7 @@ object VpnController {
 
     /** Call once at start-up. Loads the last servers the panel sent. */
     fun init(context: Context) {
-        val app = context.applicationContext
+        val app = context.applicationContext ?: context
         appContext = app
         val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs = p
