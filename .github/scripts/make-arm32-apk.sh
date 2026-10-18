@@ -30,10 +30,18 @@ if unzip -l "$work/strip.apk" | grep -q 'lib/arm64-v8a/'; then echo "64-bit libr
 
 # Native libraries are stored uncompressed, so they must be page-aligned before signing.
 "$bt/zipalign" -f -p 4 "$work/strip.apk" "$work/aligned.apk"
-"$bt/apksigner" sign \
+# Same key and passwords the Gradle build uses. An empty key password means "same as the keystore's".
+keypass=(--key-pass env:RELEASE_KEY_PASSWORD)
+[ -n "${RELEASE_KEY_PASSWORD:-}" ] || keypass=()
+[ -n "${RELEASE_KEY_ALIAS:-}" ] || { echo "::error::RELEASE_KEY_ALIAS is empty"; exit 1; }
+if ! log="$("$bt/apksigner" sign \
   --ks "$KEYSTORE_FILE" --ks-pass env:RELEASE_KEYSTORE_PASSWORD \
-  --ks-key-alias "$RELEASE_KEY_ALIAS" --key-pass env:RELEASE_KEY_PASSWORD \
-  --out "$out" "$work/aligned.apk"
+  --ks-key-alias "$RELEASE_KEY_ALIAS" "${keypass[@]}" \
+  --out "$out" "$work/aligned.apk" 2>&1)"; then
+  # apksigner never prints the passwords; show why it failed.
+  printf '%s\n' "$log" | head -n 15 | while IFS= read -r l; do echo "::error::apksigner: $l"; done
+  exit 1
+fi
 
 # Must carry exactly the same certificate as the universal APK, or it won't update existing installs.
 cert() { "$bt/apksigner" verify --print-certs "$1" | grep -m1 'certificate SHA-256 digest' ; }
