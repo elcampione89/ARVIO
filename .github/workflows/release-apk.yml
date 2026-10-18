@@ -3,6 +3,10 @@ name: Build APK Release
 on:
   push:
     branches: [panel-v2]
+    # Changing only the Firestick helper doesn't need a new app build.
+    paths-ignore:
+      - ".github/workflows/firestick-apk.yml"
+      - ".github/scripts/make-arm32-apk.sh"
   workflow_dispatch:
 
 permissions:
