@@ -45,8 +45,8 @@ interface CockpitArvioApi {
         @retrofit2.http.Query("id") id: Int
     ): ResponseBody
 
-    /** API keys set in the panel (only the filled-in ones). */
-    @GET("config.php")
+    /** API keys set in the panel (only the filled-in ones). Not "config.php": the panel blocks that name. */
+    @GET("keys.php")
     suspend fun getConfig(@Header("Authorization") authorization: String): ResponseBody
 
     /** Frees this device's slot on the panel. */
