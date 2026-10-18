@@ -1,7 +1,6 @@
 package com.arflix.tv.vpn
 
 import android.content.Context
-import android.content.Intent
 import android.content.SharedPreferences
 import android.net.VpnService
 import android.os.Build
@@ -61,6 +60,7 @@ object VpnController {
     }
 
     const val AUTO = "auto"
+    private const val VPN_PERMISSION_REQUEST = 4721
     private const val PREFS = "panel_vpn"
     private const val FILE = "panel_vpn.json"
     private const val CONFIG_DIR = "panel_wg"
@@ -193,11 +193,17 @@ object VpnController {
             return
         }
         // Android's one-time "allow VPN connection" screen; we continue when the app resumes.
+        // It must be opened "for result" from an Activity: the screen reads the calling app from
+        // that, and closes straight away when started any other way.
         VpnService.prepare(app)?.let { intent ->
+            val activity = context.findActivity()
+                ?: error("Open the VPN switch from the app's Settings screen.")
             pendingConnect = true
             _state.update { it.copy(phase = Phase.NEEDS_SETUP, message = "Choose OK to allow the VPN.") }
-            runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                .onFailure { pendingConnect = false; throw it }
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                runCatching { activity.startActivityForResult(intent, VPN_PERMISSION_REQUEST) }
+                    .onFailure { pendingConnect = false; throw it }
+            }
             return
         }
         _state.update { it.copy(phase = Phase.WORKING, message = "Finding the best server…") }
@@ -218,6 +224,12 @@ object VpnController {
         }
         _state.update { it.copy(phase = Phase.CONNECTED, message = null) }
         AppLogger.breadcrumb("Vpn", "up server=${server.id}")
+    }
+
+    private tailrec fun Context.findActivity(): android.app.Activity? = when (this) {
+        is android.app.Activity -> this
+        is android.content.ContextWrapper -> baseContext.findActivity()
+        else -> null
     }
 
     private suspend fun fetchConfig(server: Server, cacheFile: File): String {
