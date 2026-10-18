@@ -1,0 +1,62 @@
+name: Add Firestick APK to a release
+
+# Makes the 32-bit ARM (Fire TV Stick) APK from a release's universal APK and adds it to
+# that release. No rebuild: same app, same version, same signing key. New builds from
+# release-apk.yml include it automatically; this is for releases made before that.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. arvio-v2-2.2.0-f95f5349 (empty = latest)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  firestick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: panel-v2
+
+      - name: Download universal APK
+        id: dl
+        env:
+          GH_TOKEN: ${{ secrets.ARVIO_RELEASE_TOKEN || github.token }}
+        shell: bash
+        run: |
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then tag="$(gh release view --json tagName -q .tagName)"; fi
+          mkdir -p work
+          gh release download "$tag" -p '*-universal.apk' -D work
+          uni="$(ls work/*-universal.apk | head -n 1)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "uni=$uni" >> "$GITHUB_OUTPUT"
+          echo "out=${uni%-universal.apk}-firestick-arm32.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Restore signing key
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          [ -n "$RELEASE_KEYSTORE_BASE64" ] || { echo "Missing RELEASE_KEYSTORE_BASE64 secret" >&2; exit 1; }
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
+      - name: Make Firestick APK
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: bash .github/scripts/make-arm32-apk.sh "${{ steps.dl.outputs.uni }}" "${{ steps.dl.outputs.out }}"
+
+      - name: Add to release
+        env:
+          GH_TOKEN: ${{ secrets.ARVIO_RELEASE_TOKEN || github.token }}
+        shell: bash
+        run: |
+          (cd work && sha256sum *.apk > SHA256SUMS.txt)
+          gh release upload "${{ steps.dl.outputs.tag }}" "${{ steps.dl.outputs.out }}" work/SHA256SUMS.txt --clobber

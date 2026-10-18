@@ -109,7 +109,19 @@ jobs:
           mkdir -p release-artifacts
           cp app/build/outputs/apk/sideload/release/app-sideload-release.apk \
             "release-artifacts/ARVIO-${{ steps.version.outputs.name }}-${{ steps.version.outputs.short_sha }}-universal.apk"
-          sha256sum release-artifacts/*.apk > release-artifacts/SHA256SUMS.txt
+
+      - name: Make Firestick (32-bit ARM) APK
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          bash .github/scripts/make-arm32-apk.sh \
+            "release-artifacts/ARVIO-${{ steps.version.outputs.name }}-${{ steps.version.outputs.short_sha }}-universal.apk" \
+            "release-artifacts/ARVIO-${{ steps.version.outputs.name }}-${{ steps.version.outputs.short_sha }}-firestick-arm32.apk"
+          (cd release-artifacts && sha256sum *.apk > SHA256SUMS.txt)
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
