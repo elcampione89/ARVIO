@@ -6,9 +6,19 @@
 # Usage: make-arm32-apk.sh <universal.apk> <out.apk>
 # Needs: KEYSTORE_FILE, RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD
 set -euo pipefail
+trap 'echo "::error::make-arm32-apk failed (line $LINENO): $BASH_COMMAND"' ERR
 in="$1"; out="$2"
 sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-bt="$(ls -d "$sdk"/build-tools/* | sort -V | tail -n 1)"
+bt="$(ls -d "$sdk"/build-tools/*/ 2>/dev/null | sort -V | tail -n 1 || true)"
+if [ -z "$bt" ] || [ ! -x "$bt/apksigner" ]; then
+  echo "::notice::Installing Android build-tools into $sdk"
+  sm="$(ls "$sdk"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n 1 || true)"
+  [ -n "$sm" ] || { echo "::error::No sdkmanager under $sdk"; exit 1; }
+  yes | "$sm" --sdk_root="$sdk" "build-tools;35.0.0" >/dev/null
+  bt="$sdk/build-tools/35.0.0"
+fi
+bt="${bt%/}"
+echo "Using build-tools at $bt"
 work="$(mktemp -d)"
 cp "$in" "$work/strip.apk"
 
