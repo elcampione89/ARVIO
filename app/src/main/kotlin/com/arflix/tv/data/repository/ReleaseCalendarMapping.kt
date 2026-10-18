@@ -47,6 +47,7 @@ internal fun calendarMovieReleases(
             2, 3 -> CalendarReleaseKind.CINEMA
             4 -> CalendarReleaseKind.DIGITAL
             5 -> CalendarReleaseKind.PHYSICAL
+            6 -> CalendarReleaseKind.TV
             else -> return@mapNotNull null
         }
         val date = calendarDate(release.releaseDate) ?: return@mapNotNull null

@@ -69,8 +69,18 @@ export function calendarEpisodeLabel(release: CalendarRelease): string {
   return release.kind === "episode" ? `S${String(release.season).padStart(2, "0")} E${String(release.episode).padStart(2, "0")}` : "";
 }
 
+export function calendarPreviewTitles(releases: CalendarRelease[]): CalendarRelease[] {
+  const seen = new Set<string>();
+  return releases.filter(row => { const key = `${row.item.mediaType}:${row.item.id}`; if (seen.has(key)) return false; seen.add(key); return true; });
+}
+
+export function calendarRegion(language: string): string {
+  try { return new Intl.Locale(language).region || "US"; } catch { return "US"; }
+}
+
 export const CALENDAR_KIND_LABELS: Record<ReleaseKind, string> = { episode: "Episode", cinema: "Cinema release", digital: "Digital release", physical: "Physical release", tv: "TV release", release: "Release" };
 
 export function sortCalendarReleases(releases: CalendarRelease[]): CalendarRelease[] {
-  return [...releases].sort((a, b) => a.date.localeCompare(b.date) || (a.timestamp ? Date.parse(a.timestamp) : Infinity) - (b.timestamp ? Date.parse(b.timestamp) : Infinity) || a.item.title.localeCompare(b.item.title) || (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0) || a.kind.localeCompare(b.kind));
+  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+  return [...releases].sort((a, b) => compare(a.date, b.date) || (a.timestamp ? Date.parse(a.timestamp) : Infinity) - (b.timestamp ? Date.parse(b.timestamp) : Infinity) || compare(a.item.title.toLowerCase(), b.item.title.toLowerCase()) || (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0) || compare(a.kind, b.kind));
 }

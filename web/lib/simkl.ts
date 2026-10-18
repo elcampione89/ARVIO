@@ -1,6 +1,6 @@
 import { SyncClient, SyncMediaRef } from "./sync";
 import { loadStored, removeStored, saveStored } from "./storage";
-import { HttpError, jsonRequest } from "./http";
+import { jsonRequest } from "./http";
 import { resolveTmdbId, tmdb } from "./tmdb";
 import { config } from "./config";
 
@@ -22,6 +22,7 @@ export interface SimklToken {
   refresh_token?: string;
   expires_at?: number;
   connection_id?: string;
+  server_session?: boolean;
 }
 
 export interface SimklPinCode {
@@ -217,48 +218,49 @@ export class SimklClient implements SyncClient {
     return Boolean(this.token?.access_token);
   }
 
-  private deviceSession: { device_code: string; user_code: string; verifier: string; profileId: string | null; interval: number; nextPoll: number; deadline: number } | null = null;
-  private refreshPromise: Promise<void> | null = null;
+  get isV2Connected(): boolean { return Boolean(this.token?.server_session || this.token?.refresh_token); }
 
-  private async v2Auth<T>(path: string, fields: Record<string, string>): Promise<T> {
-    const client_id = config.simklV2ClientId;
-    const query = new URLSearchParams({ client_id, "app-name": "arvio", "app-version": "2.0" });
-    const response = await fetch(`/api/simkl/oauth2/${path}?${query}`, {
-      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ client_id, ...fields }).toString(), signal: AbortSignal.timeout(30_000)
+  private deviceSession: { user_code: string; profileId: string | null; interval: number; nextPoll: number; deadline: number } | null = null;
+  private sessionGeneration = 0;
+  private restorePromise: Promise<void> | null = null;
+
+  private async sessionRequest<T>(profile: string, input?: Record<string, unknown>, connection?: string): Promise<T> {
+    const response = await fetch("/api/simkl/session", {
+      method: input ? "POST" : "GET", credentials: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/json", "x-simkl-profile": profile, ...(connection ? { "x-simkl-connection": connection } : {}) },
+      body: input ? JSON.stringify(input) : undefined, signal: AbortSignal.timeout(30_000)
     });
     const data = await response.json();
-    if (!response.ok || data.error) throw Object.assign(new Error(data.error || `SIMKL HTTP ${response.status}`), { reason: data.error, status: response.status });
+    if (!response.ok || data.error) throw Object.assign(new Error(data.message || data.error || `SIMKL HTTP ${response.status}`), { reason: data.error, status: response.status });
     return data as T;
   }
 
-  private async refreshV2(rejected?: string): Promise<void> {
-    if (!this.token?.refresh_token) return;
-    if (this.refreshPromise) return this.refreshPromise;
+  private disconnectKey(profile: string) { return `arvio.web.simkl.disconnect:${profile}`; }
+
+  /** Migrate old browser grants once; thereafter only non-secret connection metadata is stored. */
+  async restoreSession(): Promise<void> {
     const profile = this.profileId;
-    const connection = this.token.connection_id;
-    const refresh = async () => {
-      if (profile !== this.profileId) throw new Error("SIMKL profile changed");
-      const stored = profile ? loadStored<SimklToken | null>(this.tokenKey(profile), null) : this.token;
-      if (stored?.connection_id !== connection) throw new Error("Reconnect SIMKL on this device");
-      if (stored && (rejected ? stored.access_token !== rejected : (stored.expires_at ?? 0) > Date.now() + 60_000)) { this.token = stored; return; }
-      const old = stored ?? this.token!;
-      const data = await this.v2Auth<{ access_token: string; refresh_token: string; token_type: string; expires_in: number; scope: string }>("token", { grant_type: "refresh_token", refresh_token: old.refresh_token! });
-      if (!data.access_token || !data.refresh_token || data.token_type?.toLowerCase() !== "bearer" ||
-          !Number.isFinite(data.expires_in) || data.expires_in <= 0 ||
-          !["media:read", "media:write"].every(scope => data.scope?.split(" ").includes(scope))) {
-        throw new Error("Reconnect SIMKL: invalid refresh permissions or response");
+    if (!profile) return;
+    if (this.restorePromise) return this.restorePromise;
+    const generation = this.sessionGeneration;
+    const operation = (async () => {
+      const pendingDisconnect = loadStored<{ connection?: string } | null>(this.disconnectKey(profile), null);
+      if (pendingDisconnect) {
+        await this.sessionRequest(profile, { action: "disconnect" }, pendingDisconnect.connection);
+        removeStored(this.disconnectKey(profile));
+        return;
       }
-      if (profile !== this.profileId || this.token?.connection_id !== connection) return;
-      this.token = { ...old, access_token: data.access_token, refresh_token: data.refresh_token, expires_at: Date.now() + data.expires_in * 1000 };
-      if (profile) saveStored(this.tokenKey(profile), this.token);
-    };
-    const operation = async () => {
-      if (typeof navigator !== "undefined" && navigator.locks) await navigator.locks.request(`arvio-simkl:${profile}:${connection}`, async () => { await refresh(); });
-      else await refresh();
-    };
-    const pending = operation().finally(() => { this.refreshPromise = null; });
-    this.refreshPromise = pending;
+      const old = this.token;
+      const data = await this.sessionRequest<{ token: SimklToken | null }>(profile,
+        old?.refresh_token ? { action: "migrate", refresh_token: old.refresh_token, connection_id: old.connection_id } : undefined);
+      if (profile !== this.profileId || generation !== this.sessionGeneration) return;
+      if (data.token) {
+        if (!data.token.server_session || data.token.refresh_token || !data.token.connection_id) throw new Error("Invalid SIMKL session response");
+        this.setToken(data.token);
+      } else if (old?.server_session) this.setToken(null);
+    })();
+    const pending = operation.finally(() => { if (this.restorePromise === pending) this.restorePromise = null; });
+    this.restorePromise = pending;
     return pending;
   }
 
@@ -281,6 +283,8 @@ export class SimklClient implements SyncClient {
     this.resetScrobbleQueue();
     this.recentCompletions.clear();
     this.deviceSession = null;
+    this.sessionGeneration++;
+    this.restorePromise = null;
     this.profileId = normalized;
     this.snapshot = null;
     this.snapshotPromise = null;
@@ -309,8 +313,9 @@ export class SimklClient implements SyncClient {
   }
 
   setToken(token: SimklToken | null) {
+    if (token?.refresh_token || token?.access_token.startsWith("simkl_at_")) throw new Error("SIMKL V2 credentials must remain on the server");
     const next = token?.access_token ? token : null;
-    const tokenChanged = next?.access_token !== this.token?.access_token;
+    const tokenChanged = (next?.connection_id ?? next?.access_token) !== (this.token?.connection_id ?? this.token?.access_token);
     if (tokenChanged) {
       this.resetScrobbleQueue();
       this.recentCompletions.clear();
@@ -325,16 +330,26 @@ export class SimklClient implements SyncClient {
     else removeStored(this.tokenKey(this.profileId));
   }
 
-  disconnect() {
+  async disconnect(): Promise<void> {
+    const profile = this.profileId;
+    const old = this.token;
+    this.sessionGeneration++;
+    this.restorePromise = null;
     this.deviceSession = null;
     if (this.profileId) removeStored(this.snapshotKey(this.profileId));
     this.setToken(null);
+    if (profile && (old?.server_session || old?.refresh_token)) {
+      // A failed network request must not reconnect the account on the next refresh.
+      saveStored(this.disconnectKey(profile), { connection: old.connection_id });
+      await this.sessionRequest(profile, { action: "disconnect", ...(old.refresh_token ? { refresh_token: old.refresh_token, connection_id: old.connection_id } : {}) }, old.connection_id);
+      removeStored(this.disconnectKey(profile));
+    }
   }
 
   private async simkl<T>(path: string, options: RequestInit = {}, accessToken = this.token?.access_token): Promise<T> {
     const scope = this.scope();
-    if (accessToken?.startsWith("simkl_at_") && this.token?.refresh_token) {
-      await this.refreshV2();
+    if (this.token?.refresh_token) {
+      await this.restoreSession();
       if (scope !== this.scope()) throw new Error("SIMKL profile changed before the request was sent");
       accessToken = this.token?.access_token;
     }
@@ -342,27 +357,22 @@ export class SimklClient implements SyncClient {
       "content-type": "application/json",
       ...(options.headers as Record<string, string>)
     };
-    if (accessToken) headers["x-user-token"] = accessToken;
+    if (this.token?.server_session) {
+      headers["x-simkl-profile"] = this.profileId!;
+      headers["x-simkl-connection"] = this.token.connection_id!;
+    } else if (accessToken) headers["x-user-token"] = accessToken;
 
     const [pathname, queryString] = path.split("?");
     const params = new URLSearchParams(queryString || "");
     if (!params.has("app-name")) params.set("app-name", "arvio");
     if (!params.has("app-version")) params.set("app-version", "2.0");
     if (config.simklClientId && !params.has("client_id")) {
-      params.set("client_id", accessToken?.startsWith("simkl_at_") ? config.simklV2ClientId : config.simklClientId);
+      params.set("client_id", this.token?.server_session ? config.simklV2ClientId : config.simklClientId);
     }
     const finalQuery = params.toString();
     const finalUrl = `/api/simkl${pathname}${finalQuery ? `?${finalQuery}` : ""}`;
 
-    try { return await jsonRequest<T>(finalUrl, { ...options, headers }); }
-    catch (error) {
-      if (!this.token?.refresh_token || !accessToken?.startsWith("simkl_at_") || !(error instanceof HttpError) || error.status !== 401) throw error;
-      if (scope !== this.scope()) throw new Error("SIMKL profile changed before retry");
-      await this.refreshV2(accessToken);
-      if (scope !== this.scope()) throw new Error("SIMKL profile changed before retry");
-      headers["x-user-token"] = this.token!.access_token;
-      return jsonRequest<T>(finalUrl, { ...options, headers });
-    }
+    return jsonRequest<T>(finalUrl, { ...options, credentials: "same-origin", headers });
   }
 
   private scope(): string {
@@ -516,19 +526,16 @@ export class SimklClient implements SyncClient {
 
   async beginPinAuth(): Promise<SimklPinCode> {
     const profileId = this.profileId;
-    const bytes = crypto.getRandomValues(new Uint8Array(32));
-    const encode = (value: Uint8Array) => btoa(String.fromCharCode(...value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    const verifier = encode(bytes);
-    const challenge = encode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
-    const data = await this.v2Auth<{ device_code: string; user_code: string; verification_uri: string; verification_uri_complete?: string; expires_in: number; interval: number }>("device", {
-      scope: "media:read media:write", code_challenge: challenge, code_challenge_method: "S256"
-    });
-    if (profileId !== this.profileId) throw new Error("SIMKL profile changed");
+    if (!profileId) throw new Error("Select an ARVIO profile first");
+    const generation = ++this.sessionGeneration;
+    this.restorePromise = null;
+    if (loadStored(this.disconnectKey(profileId), null)) await this.restoreSession();
+    const data = await this.sessionRequest<SimklPinCode>(profileId, { action: "start" });
+    if (profileId !== this.profileId || generation !== this.sessionGeneration) throw new Error("SIMKL profile changed");
     const interval = Math.max(5, data.interval || 5);
-    this.deviceSession = { device_code: data.device_code, user_code: data.user_code, verifier, profileId, interval,
+    this.deviceSession = { user_code: data.user_code, profileId, interval,
       nextPoll: Date.now() + interval * 1000, deadline: Date.now() + data.expires_in * 1000 };
-    return { user_code: data.user_code, verification_url: data.verification_uri_complete ?? data.verification_uri,
-      expires_in: data.expires_in, interval };
+    return { ...data, interval };
   }
 
   customListsRequest<T>(path: string, options: RequestInit = {}): Promise<T> { return this.simkl<T>(path, options); }
@@ -538,41 +545,31 @@ export class SimklClient implements SyncClient {
     if (!session || session.user_code !== userCode || session.profileId !== this.profileId || Date.now() >= session.deadline) throw new Error("SIMKL sign-in expired; start again");
     if (Date.now() < session.nextPoll) return null;
     session.nextPoll = Date.now() + session.interval * 1000;
-    try {
-      const data = await this.v2Auth<{ access_token: string; refresh_token: string; expires_in: number; scope: string; token_type: string }>("token", {
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: session.device_code, code_verifier: session.verifier
-      });
-      if (session !== this.deviceSession || session.profileId !== this.profileId) return null;
-      if (data.token_type?.toLowerCase() !== "bearer" || !data.access_token || !data.refresh_token ||
-          !Number.isFinite(data.expires_in) || data.expires_in <= 0 ||
-          !["media:read", "media:write"].every(scope => data.scope?.split(" ").includes(scope))) throw new Error("SIMKL did not grant watch-tracking permissions");
-      this.deviceSession = null;
-      return { access_token: data.access_token, refresh_token: data.refresh_token, expires_at: Date.now() + data.expires_in * 1000, connection_id: crypto.randomUUID() };
-    } catch (error) {
-      const reason = (error as { reason?: string }).reason;
-      if (reason === "authorization_pending") return null;
-      if (reason === "slow_down") { session.interval += 5; session.nextPoll = Date.now() + session.interval * 1000; return null; }
-      throw error;
-    }
+    const data = await this.sessionRequest<{ token: SimklToken | null }>(session.profileId!, { action: "poll", user_code: userCode });
+    if (session !== this.deviceSession || session.profileId !== this.profileId) return null;
+    if (!data.token) return null;
+    if (!data.token.server_session || data.token.refresh_token || !data.token.connection_id) throw new Error("Invalid SIMKL session response");
+    this.deviceSession = null;
+    return data.token;
   }
 
-  async watchlist(statuses: Array<"plantowatch" | "watching"> = ["plantowatch"], options: { throwOnError?: boolean } = {}): Promise<unknown[]> {
+  async watchlist(statuses: Array<"plantowatch" | "watching"> = ["plantowatch"], options: { throwOnError?: boolean; resolveIds?: boolean } = {}): Promise<unknown[]> {
     const snapshot = await this.loadSnapshot();
     if (options.throwOnError && !snapshot.complete) throw new Error("SIMKL watchlist is unavailable");
     const movies = (await Promise.all(snapshot.movies
       .filter((item) => statuses.includes(item.status as "plantowatch" | "watching"))
       .map(async (item) => ({
         type: "movie",
-        movie: await this.resolveMedia(item.movie, "movie"),
+        movie: options.resolveIds === false ? item.movie : await this.resolveMedia(item.movie, "movie"),
         listed_at: item.last_watched_at
-      })))).filter((item) => item.movie?.ids?.tmdb != null);
+      })))).filter((item) => item.movie && (options.resolveIds === false || item.movie.ids?.tmdb != null));
     const shows = (await Promise.all([...snapshot.shows, ...snapshot.anime]
       .filter((item) => statuses.includes(item.status as "plantowatch" | "watching"))
       .map(async (item) => ({
         type: "show",
-        show: await this.resolveMedia(item.show, "tv"),
+        show: options.resolveIds === false ? item.show : await this.resolveMedia(item.show, "tv"),
         listed_at: item.last_watched_at
-      })))).filter((item) => item.show?.ids?.tmdb != null);
+      })))).filter((item) => item.show && (options.resolveIds === false || item.show.ids?.tmdb != null));
     return [...movies, ...shows];
   }
 
@@ -829,7 +826,7 @@ export class SimklClient implements SyncClient {
           progress
         };
     try {
-      await this.simkl(`/scrobble/${action}`, { method: "POST", body: JSON.stringify(body), keepalive: true });
+      await this.simkl(`/scrobble/${action}${action === "pause" ? "" : "?min_progress=90"}`, { method: "POST", body: JSON.stringify(body), keepalive: true });
     } catch (error) {
       if (action !== "stop" || (error as { status?: number }).status !== 409) throw error;
     }

@@ -26,4 +26,5 @@
     <string name="calendar_next_release">Volgende release</string>
     <string name="calendar_partial_details">Sommige releasedetails niet beschikbaar</string>
     <string name="calendar_refresh">Kalender vernieuwen</string>
+    <string name="calendar_incomplete">Releaseschema onvolledig</string>
 </resources>

@@ -28,7 +28,7 @@ class ReleaseCalendarPreloadDeviceTest {
         every { watchlist.watchlistItems } returns MutableStateFlow(items)
         coEvery { watchlist.getLocalWatchlistItems() } returns items
         val repository = mockk<ReleaseCalendarRepository>()
-        coEvery { repository.loadMonth(any(), any(), any(), any(), any(), any(), any()) } returns CalendarMonthResult(emptyList(), emptyList())
+        coEvery { repository.loadMonth(any(), any(), any(), any(), any(), any(), any(), any()) } returns CalendarMonthResult(emptyList(), emptyList())
         val directory = java.io.File(context.cacheDir, "calendar-preload-test-${System.nanoTime()}")
         val store = ViewModelStore()
         val viewModel = withContext(Dispatchers.Main) {
@@ -54,14 +54,14 @@ class ReleaseCalendarPreloadDeviceTest {
         fixture { viewModel, repository ->
             val started = CompletableDeferred<Unit>()
             val finish = CompletableDeferred<Unit>()
-            coEvery { repository.loadCalendar(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            coEvery { repository.loadCalendar(any(), any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
                 started.complete(Unit)
-                arg<suspend (CalendarLoadProgress) -> Unit>(6)(progress())
+                arg<suspend (CalendarLoadProgress) -> Unit>(8)(progress())
                 finish.await()
                 progress().month
             }
             delay(300)
-            coVerify(exactly = 0) { repository.loadCalendar(any(), any(), any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { repository.loadCalendar(any(), any(), any(), any(), any(), any(), any(), any(), any()) }
             val preload = launch(Dispatchers.Main) { viewModel.preloadIdle() }
             withTimeout(10_000) { started.await() }
             withContext(Dispatchers.Main) { viewModel.onVisible() }
@@ -69,7 +69,7 @@ class ReleaseCalendarPreloadDeviceTest {
             finish.complete(Unit)
             val state = withTimeout(10_000) { viewModel.uiState.first { !it.isLoading } }
             assertEquals(listOf("fixture"), state.entries.map { it.id })
-            coVerify(exactly = 1) { repository.loadCalendar(any(), any(), any(), any(), any(), any(), any()) }
+            coVerify(exactly = 1) { repository.loadCalendar(any(), any(), any(), any(), any(), any(), any(), any(), any()) }
         }
     }
 
@@ -77,12 +77,12 @@ class ReleaseCalendarPreloadDeviceTest {
         fixture { viewModel, repository ->
             val started = CompletableDeferred<Unit>()
             val cancelled = CompletableDeferred<Unit>()
-            coEvery { repository.loadCalendar(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
-                arg<suspend (CalendarLoadProgress) -> Unit>(6)(progress().copy(month = CalendarMonthResult(emptyList(), emptyList())))
+            coEvery { repository.loadCalendar(any(), any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+                arg<suspend (CalendarLoadProgress) -> Unit>(8)(progress().copy(month = CalendarMonthResult(emptyList(), emptyList())))
                 started.complete(Unit)
                 try { awaitCancellation() } finally { cancelled.complete(Unit) }
             }
-            coEvery { repository.loadMonth(any(), any(), any(), any(), any(), false, any()) } returns progress().month
+            coEvery { repository.loadMonth(any(), any(), any(), any(), any(), false, any(), any()) } returns progress().month
             val preload = launch(Dispatchers.Main) { viewModel.preloadIdle() }
             withTimeout(10_000) { started.await() }
             preload.cancelAndJoin()
@@ -91,7 +91,36 @@ class ReleaseCalendarPreloadDeviceTest {
             withContext(Dispatchers.Main) { viewModel.onVisible() }
             val resumed = withTimeout(10_000) { viewModel.uiState.first { !it.isLoading } }
             assertEquals(listOf("fixture"), resumed.entries.map { it.id })
-            coVerify(exactly = 1) { repository.loadMonth(any(), any(), any(), any(), any(), false, any()) }
+            coVerify(exactly = 1) { repository.loadMonth(any(), any(), any(), any(), any(), false, any(), any()) }
+        }
+    }
+
+    @Test fun retryCarriesOnlyFailedTitlesAndClearsIncompleteSourceState() = runBlocking {
+        fixture { viewModel, repository ->
+            var calls = 0
+            val failedKey = MediaType.MOVIE to 2
+            val lists = progress().watchlists.copy(items = mapOf(ReleaseCalendarSource.ARVIO to
+                listOf(MediaItem(1, "Good"), MediaItem(2, "Recovering"))))
+            coEvery { repository.loadCalendar(any(), any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+                calls++
+                val month = if (calls == 1) progress().month.copy(warnings = listOf("Missing metadata"), failedTitles = setOf(failedKey))
+                    else progress().month
+                if (calls == 2) {
+                    assertEquals(setOf(failedKey), arg<Set<Pair<MediaType, Int>>>(6))
+                    assertEquals(lists, arg<CalendarWatchlists?>(7))
+                }
+                arg<suspend (CalendarLoadProgress) -> Unit>(8)(CalendarLoadProgress(lists, month, true, month.completedTitles))
+                month
+            }
+            withContext(Dispatchers.Main) { viewModel.onVisible() }
+            val failed = withTimeout(10_000) { viewModel.uiState.first { !it.isLoading } }
+            assertTrue(failed.selectedIncomplete)
+            assertEquals(setOf("arvio"), failed.incompleteSourceIds)
+            withContext(Dispatchers.Main) { viewModel.refresh() }
+            val recovered = withTimeout(10_000) { viewModel.uiState.first { !it.isLoading && it.failedTitleKeys.isEmpty() } }
+            assertFalse(recovered.selectedIncomplete)
+            assertEquals(2, calls)
+            coVerify(exactly = 0) { repository.invalidateMetadata() }
         }
     }
 }

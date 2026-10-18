@@ -30,8 +30,9 @@ export function historyToItem(entry: WatchHistoryEntry): MediaItem {
 }
 
 // Negative IDs are local identities, never IDs in the TMDB namespace.
-function trackerIdentity(media: { title?: string; ids?: { tmdb?: number; trakt?: number; imdb?: string } } | undefined): number {
-  if (media?.ids?.tmdb && media.ids.tmdb > 0) return media.ids.tmdb;
+function trackerIdentity(media: { title?: string; ids?: { tmdb?: number | string; trakt?: number; imdb?: string } } | undefined): number {
+  const tmdbId = Number(media?.ids?.tmdb);
+  if (Number.isSafeInteger(tmdbId) && tmdbId > 0) return tmdbId;
   const key = String(media?.ids?.trakt ?? media?.ids?.imdb ?? media?.title ?? "unmatched");
   let hash = 2166136261;
   for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
@@ -42,8 +43,8 @@ export function traktItemToMedia(raw: unknown): MediaItem {
   const item = raw as {
     type?: string;
     listed_at?: string;
-    movie?: { title?: string; year?: number; ids?: { tmdb?: number; trakt?: number; imdb?: string } };
-    show?: { title?: string; year?: number; ids?: { tmdb?: number; trakt?: number; imdb?: string } };
+    movie?: { title?: string; year?: number; ids?: { tmdb?: number | string; trakt?: number; imdb?: string; tvdb?: number | string } };
+    show?: { title?: string; year?: number; ids?: { tmdb?: number | string; trakt?: number; imdb?: string; tvdb?: number | string } };
   };
   const media = item.movie ?? item.show;
   const mediaType = item.show || item.type === "show" ? "tv" : "movie";
@@ -55,6 +56,7 @@ export function traktItemToMedia(raw: unknown): MediaItem {
     mediaType,
     traktId: media?.ids?.trakt ?? null,
     imdbId: media?.ids?.imdb ?? null,
+    tvdbId: Number(media?.ids?.tvdb) > 0 ? Number(media?.ids?.tvdb) : null,
     // listed_at = when the user added it to their watchlist — the field
     // "Recently added" must sort by.
     activityAt: Date.parse(item.listed_at ?? "") || 0

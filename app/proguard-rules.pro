@@ -79,6 +79,9 @@
 -keep class com.arflix.tv.data.model.** { *; }
 -keep class com.arflix.tv.data.api.** { *; }
 
+# Calendar's persisted schedule is read through Gson, including after app updates.
+-keep class com.arflix.tv.data.repository.CalendarTvSchedule { *; }
+
 # Complete sports catalogue cache is deserialized reflectively in signed builds.
 -keep class com.arflix.tv.ui.screens.tv.live.SportsScheduleSnapshot { *; }
 -keep class com.arflix.tv.ui.screens.tv.live.SportsScheduleKey { *; }

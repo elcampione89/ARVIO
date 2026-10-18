@@ -854,6 +854,7 @@ export function resolveTmdbId(item: {
   id?: number | null;
   tmdbId?: number | null;
   imdbId?: string | null;
+  tvdbId?: number | null;
   title?: string | null;
   year?: number | string | null;
 }): Promise<number | null> {
@@ -865,13 +866,14 @@ export function resolveTmdbId(item: {
   if (directId) return Promise.resolve(directId);
 
   const imdbId = item.imdbId?.trim().toLowerCase();
+  const tvdbId = Number.isSafeInteger(item.tvdbId) && item.tvdbId! > 0 ? item.tvdbId : null;
   const title = item.title?.trim() ?? "";
   const year = typeof item.year === "number" ? item.year : Number(item.year) || null;
   const normalizedTitle = normalizeLookupTitle(title);
-  if ((!imdbId || !/^tt\d+$/.test(imdbId)) && !normalizedTitle) return Promise.resolve(null);
+  if ((!imdbId || !/^tt\d+$/.test(imdbId)) && !tvdbId && !normalizedTitle) return Promise.resolve(null);
   const cacheKey = imdbId && /^tt\d+$/.test(imdbId)
     ? `${item.mediaType}:imdb:${imdbId}`
-    : `${item.mediaType}:title:${normalizedTitle}:${year ?? 0}`;
+    : tvdbId ? `${item.mediaType}:tvdb:${tvdbId}` : `${item.mediaType}:title:${normalizedTitle}:${year ?? 0}`;
   const cached = externalTmdbIdCache.get(cacheKey);
   if (cached) return cached;
 
@@ -882,6 +884,10 @@ export function resolveTmdbId(item: {
       const externalResults = item.mediaType === "tv" ? payload?.tv_results : payload?.movie_results;
       const externalId = externalResults?.[0]?.id;
       if (externalId) return externalId;
+    }
+    if (tvdbId && item.mediaType === "tv") {
+      const payload = await tmdb<TmdbExternalFind>(`find/${tvdbId}`, { external_source: "tvdb_id" }).catch(() => null);
+      if (payload?.tv_results?.[0]?.id) return payload.tv_results[0].id;
     }
     if (!normalizedTitle) return null;
 

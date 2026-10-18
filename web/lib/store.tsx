@@ -883,6 +883,9 @@ export function AppProvider({
         // Cache read must never block the refresh.
       }
       try {
+      await simklClient.restoreSession().catch(() => undefined);
+      if (!isCurrent()) return;
+      setSimklConnected(simklClient.isConnected);
       await flushAddonOutbox(authClient).catch(() => undefined);
       await flushWatchlistOutbox(authClient).catch(() => undefined);
       const localAddons = loadLocalAddons();
@@ -913,7 +916,7 @@ export function AppProvider({
             }
           } else {
             traktClient.setToken(cloudTracking.traktToken);
-            if (!simklClient.token?.refresh_token) simklClient.setToken(cloudTracking.simklToken);
+            if (!simklClient.isV2Connected) simklClient.setToken(cloudTracking.simklToken);
             mdblistClient.setKey(cloudTracking.mdbListApiKey);
             if (cloudTracking.mdbListAccessToken) {
               mdblistClient.setToken({
@@ -2354,8 +2357,10 @@ export function AppProvider({
   const disconnectSimkl = useCallback(async () => {
     const targetProfileId = activeProfileIdRef.current;
     simklClient.setProfile(targetProfileId);
-    simklClient.disconnect();
+    const disconnect = simklClient.disconnect().catch(() => undefined);
     setSimklConnected(false);
+    await disconnect;
+    if (activeProfileIdRef.current !== targetProfileId) return;
     const current = loadTrackingPreferences(targetProfileId);
     const fallback = traktClient.isConnected ? "trakt" as const : mdblistClient.isConnected ? "mdblist" as const : "auto" as const;
     const replaceSimkl = (mode: typeof current.watchlistReadMode) =>

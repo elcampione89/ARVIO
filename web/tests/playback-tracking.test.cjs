@@ -38,11 +38,11 @@ test('Simkl completion survives immediate next-episode start, with actual delive
   assert.equal(completed, false, 'queued does not mean accepted by Simkl');
   assert.equal(h.calls.length, 1);
   await h.advance(); await stop;
-  assert.equal(h.calls[1].path, '/scrobble/stop');
+  assert.equal(h.calls[1].path, '/scrobble/stop?min_progress=90');
   assert.equal(h.calls[1].body.episode.number, 3);
   assert.equal(h.calls[1].body.progress, 100);
   await h.advance(); await startNext;
-  assert.equal(h.calls[2].path, '/scrobble/start');
+  assert.equal(h.calls[2].path, '/scrobble/start?min_progress=90');
   assert.equal(h.calls[2].body.episode.number, 4);
   assert.equal(h.calls[2].at - h.calls[1].at, 20_500);
   assert.equal(h.timers.size, 0);

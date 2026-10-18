@@ -27,6 +27,7 @@ function route(provider, env, fetch) {
   }
   return load(`app/api/${provider}/${provider === 'cloud-auth' ? '[action]' : '[...path]'}/route.ts`, {
     'next/server': { NextResponse },
+    '@/lib/server/simklSessionHttp': {},
   }, { process: { env }, fetch });
 }
 

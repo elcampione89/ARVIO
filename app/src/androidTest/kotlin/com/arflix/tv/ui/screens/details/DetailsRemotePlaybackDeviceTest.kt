@@ -3,7 +3,12 @@ package com.arflix.tv.ui.screens.details
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.arflix.tv.data.model.Episode
@@ -19,6 +24,7 @@ import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,6 +54,35 @@ class DetailsRemotePlaybackDeviceTest {
             assertEquals(1, plays)
             assertEquals(episodes[1].identity, playedEpisode)
         }
+    }
+
+    @Test fun episodeRailFocusKeepsWhiteOutlineWithoutBlackInnerBorder() {
+        show(MediaType.TV)
+        key(KeyEvent.KEYCODE_DPAD_DOWN) // seasons
+        val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
+        val beforeBounds = compose.onNodeWithTag("episode_1_1").fetchSemanticsNode().boundsInRoot
+        val beforePixels = compose.onRoot().captureToImage().toPixelMap()
+        val beforeInnerEdge = beforePixels[
+            beforeBounds.center.x.toInt(), (beforeBounds.top + 4f * density).toInt()
+        ].luminance()
+        assertTrue("The unfocused card must have a visible surface", beforeInnerEdge > 0f)
+
+        fun assertFocusOutline(episodeNumber: Int) {
+            val bounds = compose.onNodeWithTag("episode_1_$episodeNumber").fetchSemanticsNode().boundsInRoot
+            // Capture the whole screen so the fixed row overlay is included, not just the card.
+            val pixels = compose.onRoot().captureToImage().toPixelMap()
+            val x = bounds.center.x.toInt()
+            assertTrue("The white episode focus ring must remain", pixels[x, bounds.top.toInt()].luminance() > 0.9f)
+            assertTrue("The row overlay must not add a black inner border",
+                pixels[x, (bounds.top + 4f * density).toInt()].luminance() >= beforeInnerEdge - 0.0001f)
+        }
+
+        key(KeyEvent.KEYCODE_DPAD_DOWN) // episodes
+        assertFocusOutline(1)
+        key(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertFocusOutline(2)
+        key(KeyEvent.KEYCODE_DPAD_LEFT)
+        assertFocusOutline(1)
     }
 
     @Test fun heldOkDoesNotStartPlaybackTwice() {

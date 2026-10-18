@@ -3429,8 +3429,7 @@ private fun FixedDetailsRailFocusOverlay(
             .padding(start = startPadding, top = topPadding)
             .width(width)
             .aspectRatio(aspectRatio)
-            .zIndex(4f)
-            .then(if (highContrast) Modifier.border(5.dp, Color.Black, rememberArvioCardShape(ArvioSkin.radius.md)) else Modifier),
+            .zIndex(4f),
         shape = rememberArvioCardShape(ArvioSkin.radius.md),
         backgroundColor = Color.Transparent,
         outlineColor = if (highContrast) Color.White else ArvioSkin.colors.focusOutline,

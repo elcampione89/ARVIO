@@ -12,8 +12,16 @@ enum class ReleaseCalendarSource(val id: String, val label: String) {
 }
 
 enum class CalendarReleaseKind(val label: String) {
-    EPISODE("Episode"), CINEMA("Cinema"), DIGITAL("Digital"), PHYSICAL("Physical"), MOVIE("Movie")
+    EPISODE("Episode"), CINEMA("Cinema"), DIGITAL("Digital"), PHYSICAL("Physical"), TV("TV release"), MOVIE("Release")
 }
+
+val calendarReleaseOrder: Comparator<CalendarRelease> = compareBy<CalendarRelease> { it.date }
+    .thenBy { it.releaseInstant ?: Instant.MAX }.thenBy { it.media.title.lowercase(java.util.Locale.ROOT) }
+    .thenBy { it.seasonNumber ?: 0 }.thenBy { it.episodeNumber ?: 0 }
+    .thenBy { if (it.kind == CalendarReleaseKind.MOVIE) "release" else it.kind.name.lowercase(java.util.Locale.ROOT) }
+
+fun calendarPreviewTitles(releases: List<CalendarRelease>): List<CalendarRelease> =
+    releases.distinctBy { it.media.mediaType to it.media.id }
 
 /** Date-only metadata never becomes a synthetic midnight timestamp. */
 data class CalendarRelease(

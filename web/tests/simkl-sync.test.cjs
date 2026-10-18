@@ -67,6 +67,20 @@ test('Simkl updates retain unchanged rows and do not fetch IDs without a deletio
   assert.equal(state.requests.filter(p => p.includes('ids_only')).length, 0);
 });
 
+test('calendar retains anime without TMDB IDs for bounded identity resolution instead of silently dropping them', async () => {
+  const { client, state } = libraryFixture();
+  state.initial.anime = [{ status: 'watching', show: { title: 'Anime with external identity', year: 2026, ids: { simkl: 900, tvdb: 123, imdb: 'tt1234567' } } }];
+  const rows = await client.watchlist(['plantowatch', 'watching'], { throwOnError: true, resolveIds: false });
+  assert.equal(rows.length, 4);
+  const { traktItemToMedia } = load('lib/mappers.ts', { './config': { config: {} }, './tmdb': {}, './mediaImages': {} });
+  const anime = traktItemToMedia(rows.find(row => row.show?.ids?.simkl === 900));
+  assert.equal(anime.mediaType, 'tv');
+  assert.ok(anime.id < 0, 'Foreign numeric IDs must never be mistaken for TMDB IDs');
+  assert.equal(anime.tvdbId, 123);
+  assert.equal(anime.imdbId, 'tt1234567');
+  assert.equal(traktItemToMedia({ show: { ids: { tmdb: '321' } } }).id, 321);
+});
+
 test('failed deletion reconciliation retains the snapshot and retries from the unacknowledged watermark', async () => {
   const { client, state, expire } = libraryFixture();
   await client.watchlist();

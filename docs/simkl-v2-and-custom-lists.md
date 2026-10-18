@@ -12,9 +12,13 @@ ARVIO now uses SIMKL AUTH V2 for new Android/TV and browser sign-ins. Existing V
 
 ## Authentication and privacy
 
-Device authorization uses PKCE S256, `media:read media:write`, form-encoded OAuth requests and the server's polling interval. Pending authorization and `slow_down` retain the session; profile switches invalidate it. Expiring access tokens refresh through one owner, with rotating refresh tokens persisted before another caller proceeds. Browser tabs additionally coordinate refresh with Web Locks. Tracking cache identity remains stable across refreshes.
+Device authorization uses PKCE S256, `media:read media:write`, form-encoded OAuth requests and the server's polling interval. Pending authorization and `slow_down` retain the session; profile switches invalidate it. SIMKL's current refresh tokens are non-rotating, but refreshing immediately replaces the access token. Android serializes refresh with its repository mutex; web sessions use persistent compare-and-set leases across server instances and browser tabs. Tracking cache identity remains stable across refreshes.
 
-V2 grants stay local to the device and profile: Android encrypts them with the existing secure-storage mechanism; the browser uses its existing local credential store. Cloud sync deliberately excludes V2 access/refresh grants, because sharing a rotating refresh token between devices breaks rotation. V1 credential compatibility is preserved. Disconnect removes the local connection; remote grants can also be revoked in SIMKL's Connected Apps settings.
+V2 grants are separate per device and profile. Android encrypts them with the existing secure-storage mechanism. Web access/refresh tokens and PKCE verifiers stay exclusively on the server: AES-256-GCM encrypted records in a site-wide Netlify Blobs store, or a private persistent directory for Docker/Node installs. The random profile-specific session cookie is HttpOnly, SameSite=Strict and Secure on HTTPS. The browser stores only non-secret connection metadata. Existing browser V2 grants migrate once after server acknowledgement; failed migration keeps the old connection for retry. Cloud sync excludes both V2 grants and web session markers. V1 credential compatibility is preserved.
+
+Disconnect clears local access first and revokes the V2 grant through `/oauth2/revoke`, without revoking other devices. Web provider failures retain an encrypted pending revocation and retry on session restoration; offline browser requests retain a non-secret disconnect tombstone so refresh cannot reconnect the removed account. Android attempts revocation with a five-second timeout; if offline, users can revoke it in SIMKL's Connected Apps settings. No offline implementation can guarantee immediate remote revocation.
+
+Tracking sends `min_progress=90` on scrobble start/stop (and server-proxied check-in), matching ARVIO's watched threshold instead of SIMKL's 80% default. Pause requests retain their original behavior.
 
 ## Lists
 

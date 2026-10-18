@@ -25,10 +25,10 @@ const indexes = new Map<string, { at: number; lists: SimklCustomList[] }>();
 
 /** SIMKL has no global list-name search API: search popular official, owned, followed and shared lists. */
 export async function searchSimklCustomLists(query: string): Promise<SimklCustomList[]> {
-  if (!simklClient.token?.refresh_token) throw new Error("Reconnect SIMKL once to enable custom lists.");
+  if (!simklClient.isV2Connected) throw new Error("Reconnect SIMKL once to enable custom lists.");
   const normalized = query.trim().toLowerCase();
   if (normalized.length < 2) return [];
-  const key = simklClient.token.connection_id!;
+  const key = simklClient.token!.connection_id!;
   let cached = indexes.get(key);
   if (!cached || Date.now() - cached.at >= 900_000) {
     const settings = await simklClient.customListsRequest<{ account?: { id?: number | string } }>("/users/settings", { method: "POST", body: "{}" });
@@ -63,8 +63,8 @@ export async function searchSimklCustomLists(query: string): Promise<SimklCustom
 export async function loadSimklCustomList(raw: string): Promise<SimklCustomList> {
   const parsed = parseSimklListUrl(raw);
   if (!parsed) throw new Error("Enter a SIMKL custom-list URL.");
-  if (!simklClient.token?.refresh_token) throw new Error("Reconnect SIMKL once to enable custom lists.");
-  const key = `${simklClient.token.connection_id}:${parsed.id}`;
+  if (!simklClient.isV2Connected) throw new Error("Reconnect SIMKL once to enable custom lists.");
+  const key = `${simklClient.token!.connection_id}:${parsed.id}`;
   const cached = lists.get(key);
   if (cached && Date.now() - cached.at < (cached.list.type === "auto" ? 86_400_000 : 900_000)) return cached.list;
   const read = async (page: number) => {

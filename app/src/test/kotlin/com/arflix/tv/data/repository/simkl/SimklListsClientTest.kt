@@ -1,6 +1,8 @@
 package com.arflix.tv.data.repository.simkl
 
 import com.arflix.tv.data.model.CatalogSourceType
+import com.arflix.tv.data.api.SimklApi
+import com.arflix.tv.data.api.SimklScrobbleBody
 import com.arflix.tv.util.CatalogUrlParser
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
@@ -11,6 +13,8 @@ import org.junit.Test
 import java.net.URLDecoder
 import java.security.MessageDigest
 import okio.ByteString.Companion.toByteString
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
 
 class SimklListsClientTest {
     @Test fun `SIMKL links accept real owner URLs and canonical numeric links only`() {
@@ -101,6 +105,33 @@ class SimklListsClientTest {
             val request = fields(server.takeRequest().body.readUtf8())
             assertEquals("refresh_token", request["grant_type"])
             assertEquals("private-refresh", request["refresh_token"])
+        }
+    }
+
+    @Test fun `disconnect revocation posts the grant and accepts an empty success response`() = runTest {
+        withServer { server, api ->
+            server.enqueue(MockResponse().setResponseCode(200))
+            api.revoke("simkl_rt_private")
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/oauth2/revoke", request.requestUrl!!.encodedPath)
+            assertEquals("simkl_rt_private", fields(request.body.readUtf8())["token"])
+            assertEquals("public-test-client", request.requestUrl!!.queryParameter("client_id"))
+        }
+    }
+
+    @Test fun `scrobble start and stop use the app 90 percent watched threshold but pause is unchanged`() = runTest {
+        withServer { server, _ ->
+            val api = Retrofit.Builder().baseUrl(server.url("/"))
+                .addConverterFactory(GsonConverterFactory.create()).build().create(SimklApi::class.java)
+            val body = SimklScrobbleBody(progress = 85f)
+            repeat(3) { server.enqueue(json("{}")) }
+            api.scrobbleStart("Bearer test", "client", body)
+            api.scrobbleStop("Bearer test", "client", body)
+            api.scrobblePause("Bearer test", "client", body)
+            assertEquals("90", server.takeRequest().requestUrl!!.queryParameter("min_progress"))
+            assertEquals("90", server.takeRequest().requestUrl!!.queryParameter("min_progress"))
+            assertNull(server.takeRequest().requestUrl!!.queryParameter("min_progress"))
         }
     }
 

@@ -26,4 +26,5 @@
     <string name="calendar_next_release">Próximo estreno</string>
     <string name="calendar_partial_details">Algunos detalles de los estrenos no están disponibles</string>
     <string name="calendar_refresh">Actualizar calendario</string>
+    <string name="calendar_incomplete">Calendario de estrenos incompleto</string>
 </resources>

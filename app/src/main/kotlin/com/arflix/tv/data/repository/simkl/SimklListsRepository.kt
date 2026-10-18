@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** A device-local V2 grant shared by tracking and custom lists. Never copy rotating refresh tokens via Cloud. */
+/** A device-local V2 grant shared by tracking and custom lists. Never share grants via Cloud. */
 @Singleton
 class SimklListsRepository @Inject constructor(
     @ApplicationContext context: Context,
@@ -64,11 +64,28 @@ class SimklListsRepository @Inject constructor(
         return true
     }
 
-    suspend fun disconnect() = mutex.withLock {
-        val profile = profileManager.getProfileIdSync()
-        check(prefs.edit().remove(key(profile)).commit())
-        indexCache.remove(profile)
-        cache.keys.removeAll { it.startsWith("$profile:") }
+    suspend fun disconnect(afterLocalDisconnect: suspend () -> Unit = {}) {
+        val profile = profileId()
+        val removed = mutex.withLock {
+            val saved = read(profile)
+            check(prefs.edit().remove(key(profile)).commit())
+            indexCache.remove(profile)
+            cache.keys.removeAll { it.startsWith("$profile:") }
+            saved
+        }
+        try {
+            afterLocalDisconnect()
+        } finally {
+            // Local disconnect wins even offline; never revoke a later reconnect's grant.
+            if (removed != null) {
+                try {
+                    client.revoke(removed.refreshToken)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    com.arflix.tv.util.AppLogger.w("SimklAuth", "SIMKL grant could not be revoked; remove it in SIMKL Connected Apps if offline.")
+                }
+            }
+        }
     }
 
     private suspend fun grant(profile: String): SimklListsGrant {

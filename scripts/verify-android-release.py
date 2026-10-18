@@ -11,12 +11,14 @@ import zipfile
 parser = argparse.ArgumentParser()
 parser.add_argument("--sdk", type=pathlib.Path, required=True)
 parser.add_argument("--apk", type=pathlib.Path)
-parser.add_argument("--aab", type=pathlib.Path, required=True)
+parser.add_argument("--aab", type=pathlib.Path)
 parser.add_argument("--build-config", type=pathlib.Path, required=True)
 parser.add_argument("--version-code", type=int, required=True)
 parser.add_argument("--version-name", required=True)
 parser.add_argument("--certificate", required=True)
 args = parser.parse_args()
+if not args.apk and not args.aab:
+    parser.error("at least one of --apk or --aab is required")
 
 
 def run(*command):
@@ -27,9 +29,10 @@ certificate = args.certificate.lower().replace(":", "")
 if args.apk:
     signatures = run(args.sdk / "apksigner.bat", "verify", "--print-certs", args.apk)
     assert certificate in signatures.lower(), "APK signing key changed"
-bundle_cert = run("keytool", "-printcert", "-jarfile", args.aab)
-assert certificate in bundle_cert.lower().replace(":", ""), "AAB signing key changed"
-run("jarsigner", "-verify", args.aab)
+if args.aab:
+    bundle_cert = run("keytool", "-printcert", "-jarfile", args.aab)
+    assert certificate in bundle_cert.lower().replace(":", ""), "AAB signing key changed"
+    run("jarsigner", "-verify", args.aab)
 if args.apk:
     run(args.sdk / "zipalign.exe", "-c", "-P", "16", "4", args.apk)
     manifest = run(args.sdk / "aapt.exe", "dump", "badging", args.apk)

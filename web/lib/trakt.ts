@@ -35,6 +35,29 @@ export class TraktClient {
   token: TraktToken | null = null;
   private profileId: string | null = null;
   private refreshInFlight: { profileId: string | null; token: string; promise: Promise<TraktToken | null> } | null = null;
+  private calendarMetadata = new Map<string, { at: number; promise: Promise<unknown> }>();
+
+  private calendarRead<T>(path: string): Promise<T> {
+    const saved = this.calendarMetadata.get(path);
+    if (saved && Date.now() - saved.at < 30 * 60_000) return saved.promise as Promise<T>;
+    const promise = this.trakt<T>(path).catch(error => { this.calendarMetadata.delete(path); throw error; });
+    this.calendarMetadata.set(path, { at: Date.now(), promise });
+    while (this.calendarMetadata.size > 512) this.calendarMetadata.delete(this.calendarMetadata.keys().next().value!);
+    return promise;
+  }
+
+  private async calendarListRead<T>(path: string, accessToken: string): Promise<T> {
+    const profileId = this.profileId;
+    const read = () => this.trakt<T>(path, { headers: { "x-user-token": accessToken } });
+    try { return await read(); }
+    catch (error) {
+      const status = (error as { status?: number }).status;
+      if (![500, 502, 503, 504].includes(status ?? 0) && !(error instanceof TypeError)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 250));
+      if (this.profileId !== profileId) throw error;
+      return read();
+    }
+  }
 
   get currentProfileId(): string | null {
     return this.profileId;
@@ -119,9 +142,45 @@ export class TraktClient {
   async watchlist() {
     const token = await this.refreshIfNeeded();
     if (!token) return [];
-    return this.trakt<unknown[]>("/sync/watchlist", {
-      headers: { "x-user-token": token.access_token }
-    });
+    const all: unknown[] = [];
+    const seen = new Set<string>();
+    for (let page = 1; ; page++) {
+      const rows = await this.calendarListRead<Array<{ type?: string; movie?: { ids?: unknown }; show?: { ids?: unknown } }>>(`/sync/watchlist?page=${page}&limit=100`, token.access_token);
+      const fresh = rows.filter(row => {
+        const key = `${row.type}:${JSON.stringify(row.movie?.ids ?? row.show?.ids ?? row)}`;
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+      all.push(...fresh);
+      if (rows.length < 100 || !fresh.length) return all;
+    }
+  }
+
+  async calendarWatchingShows() {
+    const token = await this.refreshIfNeeded();
+    if (!token) return [];
+    const readShows = async (path: string) => {
+      const all: Array<{ show?: { ids?: { trakt?: number } } }> = [];
+      const seen = new Set<number>();
+      for (let page = 1; ; page++) {
+        // Identity-only responses avoid downloading watched episode histories.
+        const rows = await this.calendarListRead<Array<{ show?: { ids?: { trakt?: number } } }>>(`${path}${path.includes("?") ? "&" : "?"}page=${page}&limit=100`, token.access_token);
+        const fresh = rows.filter(row => {
+          const id = row.show?.ids?.trakt;
+          if (typeof id !== "number" || seen.has(id)) return false;
+          seen.add(id); return true;
+        });
+        all.push(...fresh);
+        if (rows.length < 100 || !fresh.length) return all;
+      }
+    };
+    const [all, hidden, resetHidden] = await Promise.all([
+      readShows("/sync/watched/shows"),
+      readShows("/users/hidden/progress_watched?type=show"),
+      readShows("/users/hidden/progress_watched_reset?type=show")
+    ]);
+    const excluded = new Set([...hidden, ...resetHidden].map(row => row.show!.ids!.trakt!));
+    return all.filter(row => !excluded.has(row.show!.ids!.trakt!)).map(row => ({ ...row, type: "show" }));
   }
 
   // The user's personal collection (owned/available items).
@@ -278,11 +337,11 @@ export class TraktClient {
     if (!config.traktClientId) return [];
     let id = traktId;
     if (!id) {
-      const matches = await this.trakt<Array<{ show?: { ids?: { trakt?: number; tmdb?: number } } }>>(`/search/tmdb/${tmdbId}?type=show`);
+      const matches = await this.calendarRead<Array<{ show?: { ids?: { trakt?: number; tmdb?: number } } }>>(`/search/tmdb/${tmdbId}?type=show`);
       id = matches.find(row => row.show?.ids?.tmdb === tmdbId)?.show?.ids?.trakt;
     }
     if (!id) return [];
-    return this.trakt<Array<{ season: number; number: number; first_aired?: string | null }>>(`/shows/${id}/seasons/${season}?extended=full`);
+    return this.calendarRead<Array<{ season: number; number: number; first_aired?: string | null }>>(`/shows/${id}/seasons/${season}?extended=full`);
   }
 
   async history(type?: "movies" | "shows" | "episodes") {
@@ -434,7 +493,9 @@ export class TraktClient {
         } catch (error) {
           // A 401 is an expired/revoked token, not a transport problem — the
           // proxy would fail identically, so let it bubble to the retry below.
-          if ((error as { status?: number }).status === 401) throw error;
+          const status = (error as { status?: number }).status;
+          if (status === 401 || status === 429) throw error;
+          if (status === 404 && /^(search\/tmdb\/\d+|shows\/\d+\/seasons\/\d+)(\?|$)/.test(path.replace(/^\/+/, ""))) throw error;
           if (path.startsWith("/scrobble/") && [400, 404, 409, 422, 429].includes((error as { status?: number }).status ?? 0)) throw error;
           return jsonRequest<T>(url.toString(), request);
         }
@@ -501,6 +562,10 @@ export class TraktClient {
     // exchange/refresh need the client secret (backend-only) — no direct fallback.
     if (normalized === "oauth/device/code") return true;
     if (normalized.startsWith("oauth/")) return false;
+    // These read-only endpoints need only the public application ID. Sending
+    // them through our blocked server loses the local air date on the web.
+    if ((init.method ?? "GET") === "GET" &&
+        /^(search\/tmdb\/\d+|shows\/\d+\/seasons\/\d+)(\?|$)/.test(normalized)) return true;
     const headers = new Headers(init.headers ?? {});
     return Boolean(headers.get("x-user-token") || headers.get("Authorization"));
   }
@@ -519,9 +584,9 @@ export class TraktClient {
       ...init,
       headers,
       cache: "no-store",
-      // Fresh timeout: the signal inherited from the proxy attempt may already
-      // be (nearly) expired by the time this fallback runs.
-      signal: typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(timeoutMs) : undefined
+      signal: init.signal && typeof AbortSignal.any === "function"
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)])
+        : init.signal ?? (typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(timeoutMs) : undefined)
     });
     if (!response.ok) {
       const raw = await response.text().catch(() => "");

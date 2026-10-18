@@ -107,6 +107,33 @@ class HomeMobileCategoryOrderingTest {
     }
 
     @Test
+    fun `applyIptvFavoritesPlacement adds favorite tv first when the list lost it`() {
+        // A Home rebuilt from an imported template: no built-in rows, Favorite TV included.
+        val savedCatalogs = listOf(
+            CatalogConfig(id = "collection_rail_custom_template_discover", title = "Discover", sourceType = CatalogSourceType.PREINSTALLED),
+            CatalogConfig(id = "addon_rows", title = "Addon", sourceType = CatalogSourceType.ADDON)
+        )
+
+        val result = applyIptvFavoritesPlacement(savedCatalogs, enabled = true)
+
+        assertThat(result.map { it.id }).containsExactly(
+            "favorite_tv",
+            "collection_rail_custom_template_discover",
+            "addon_rows"
+        ).inOrder()
+        assertThat(result.first().sourceType).isEqualTo(CatalogSourceType.PREINSTALLED)
+    }
+
+    @Test
+    fun `applyIptvFavoritesPlacement leaves a list without favorite tv alone when disabled`() {
+        val savedCatalogs = listOf(
+            CatalogConfig(id = "trending_movies", title = "Trending in Movies", sourceType = CatalogSourceType.MDBLIST, isPreinstalled = true)
+        )
+
+        assertThat(applyIptvFavoritesPlacement(savedCatalogs, enabled = false)).isEqualTo(savedCatalogs)
+    }
+
+    @Test
     fun `orderCategoriesBySavedCatalogs respects custom placement of favorite tv`() {
         val savedCatalogs = listOf(
             CatalogConfig(id = "trending_movies", title = "Trending in Movies", sourceType = CatalogSourceType.MDBLIST, isPreinstalled = true),

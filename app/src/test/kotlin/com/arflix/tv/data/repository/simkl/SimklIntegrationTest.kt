@@ -16,6 +16,7 @@ import com.google.gson.Gson
 import com.google.gson.JsonElement
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.runBlocking
@@ -113,6 +114,20 @@ class SimklIntegrationTest {
         assertFalse(authManager.isConnected())
         coVerify { syncProviderStore.setSimklAccessToken(null) }
         coVerify { syncProviderStore.onProviderDisconnected(com.arflix.tv.data.repository.sync.SyncProvider.SIMKL) }
+    }
+
+    @Test
+    fun testV2DisconnectClearsRoutingForTheCapturedProfileBeforeRevocation() = runBlocking {
+        val v2 = mockk<SimklListsRepository>(relaxed = true)
+        every { v2.profileId() } returns "original-profile"
+        coEvery { v2.disconnect(any()) } coAnswers {
+            every { v2.profileId() } returns "other-profile"
+            firstArg<suspend () -> Unit>().invoke()
+            coVerify { syncProviderStore.setSimklAccessToken(null, "original-profile") }
+            coVerify { syncProviderStore.onProviderDisconnected(com.arflix.tv.data.repository.sync.SyncProvider.SIMKL, "original-profile") }
+        }
+        SimklAuthManager(simklApi, syncProviderStore, v2).disconnect()
+        coVerify(exactly = 0) { syncProviderStore.setSimklAccessToken(null, "other-profile") }
     }
 
     @Test

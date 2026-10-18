@@ -7,11 +7,15 @@ import com.arflix.tv.data.api.TmdbReleaseDatesResponse
 import com.arflix.tv.data.api.TmdbReleaseDatesResult
 import com.arflix.tv.data.api.TraktCalendarEpisode
 import com.arflix.tv.data.model.CalendarReleaseKind
+import com.arflix.tv.data.model.CalendarRelease
+import com.arflix.tv.data.model.calendarReleaseOrder
+import com.arflix.tv.data.model.calendarPreviewTitles
 import com.arflix.tv.data.model.MediaItem
 import com.arflix.tv.data.model.MediaType
 import com.arflix.tv.data.model.ReleaseCalendarSource
 import com.arflix.tv.ui.screens.watchlist.calendar.ReleaseCalendarUiState
 import java.time.LocalDate
+import java.time.Instant
 import java.time.YearMonth
 import java.time.ZoneId
 import org.junit.Assert.*
@@ -20,6 +24,32 @@ import org.junit.Test
 class ReleaseCalendarMappingTest {
     private val month = YearMonth.of(2026, 10)
     private val title = CalendarWatchlistTitle(MediaItem(10, "Example", mediaType = MediaType.TV), setOf("arvio", "trakt"))
+
+    @Test fun `television movie releases and empty regional fallback are preserved`() {
+        val details = TmdbMovieDetails(releaseDates = TmdbReleaseDatesResponse(listOf(
+            TmdbReleaseDatesResult("NL", emptyList()),
+            TmdbReleaseDatesResult("US", listOf(TmdbReleaseDate(type = 6, releaseDate = "2026-10-16T00:00:00Z")))
+        )))
+        val release = calendarMovieReleases(title, details, month, "nl").single()
+        assertEquals(CalendarReleaseKind.TV, release.kind)
+        assertEquals("US", release.region)
+    }
+
+    @Test fun `known times sort before date only releases and batch posters do not repeat`() {
+        val untimed = CalendarRelease("late", title.media, month.atDay(16), kind = CalendarReleaseKind.EPISODE, episodeNumber = 1)
+        val timed = untimed.copy(id = "early", episodeNumber = 2, releaseInstant = Instant.parse("2026-10-16T19:00:00Z"))
+        val rows = listOf(untimed, timed).sortedWith(calendarReleaseOrder)
+        assertEquals(listOf("early", "late"), rows.map { it.id })
+        assertEquals(2, rows.size)
+        assertEquals(1, calendarPreviewTitles(rows).size)
+    }
+
+    @Test fun `metadata failure is only attributed to affected source filters`() {
+        val state = ReleaseCalendarUiState(warnings = listOf("Missing title"), incompleteSourceIds = setOf("trakt"))
+        assertTrue(state.selectedIncomplete)
+        assertTrue(state.copy(selectedSourceId = "trakt").selectedIncomplete)
+        assertFalse(state.copy(selectedSourceId = "arvio").selectedIncomplete)
+    }
 
     @Test fun `date only never becomes midnight or shifts day in another timezone`() {
         val releases = calendarEpisodeReleases(title, listOf(TmdbEpisode(airDate = "2026-10-04")), emptyList(), month, ZoneId.of("Pacific/Honolulu"))

@@ -8,7 +8,9 @@ horizontal release strip beneath the month. Existing Library tabs remain availab
 
 - ARVIO's own local/cloud watchlist works without a connected tracking account.
 - Connected Trakt, SIMKL and MDBList watchlists can be combined or filtered by service.
-  SIMKL also includes titles currently being watched.
+  Trakt and SIMKL also include shows currently being watched. Trakt hidden-progress
+  shows are excluded; all watched-show and hidden-list pages are read without
+  downloading per-episode viewing history.
 - Matching titles are deduplicated by media type and TMDB identity, retaining every
   contributing service as provenance. Reading the calendar does not modify lists.
 - TMDB supplies movie releases and episode dates/stills. Public Trakt episode
@@ -17,15 +19,20 @@ horizontal release strip beneath the month. Existing Library tabs remain availab
 - Confirmed timestamps are converted to the device's timezone. Date-only releases
   retain their published date and display **Time TBA**. Movie release regions are
   labelled, including a US fallback when no release is listed for the chosen region.
-- Missing metadata is reported as a partial result with a retry action. An artwork
-  failure must not discard a confirmed release date.
+- Missing metadata is reported as a partial result with a retry action, not as a
+  confirmed empty day. The incomplete empty-day state respects the selected
+  service. An artwork failure must not discard a confirmed release date.
+- Releases sort by date, confirmed local time, title and episode identity, with
+  unknown times last. Movie release types include TV premieres. A nonempty US
+  release list is used when the requested region has no usable dates.
 
 ## Interaction and responsiveness
 
 The month starts on Monday. Previous/next month controls work across year
 boundaries and keep the selected day where possible. On TV, left/right
 moves one day, up/down moves a week, and OK enters the selected day's release strip.
-OK on a release opens its details. Up returns from that strip to the selected day.
+OK on a release opens its details with the exact season and episode selected.
+Episode captions include the episode name. Up returns from that strip to the selected day.
 Remote day navigation stays inside the displayed month; adjacent-month cells are
 not remote focus targets. Use the month controls to change months. Up from the
 first week enters those controls, and Down returns to the selected date, rather
@@ -55,11 +62,16 @@ or genuinely short windows scroll the entire month surface.
 The TV Library tabs start at 74 dp, just below the visible topbar controls, rather
 than reserving the full 98 dp gradient area as empty space. This tighter spacing
 is shared by all four Library sections; topbar bounds and touch spacing stay unchanged.
-Dates with multiple releases show up to three portrait posters and a `+N` count
-for further releases, both focused and unfocused. Single-release cells retain
+Dates with multiple releases show up to three distinct-title portrait posters and a
+`+N` count for further titles, both focused and unfocused. Release counts still
+include every episode, including batch releases. Single-release cells retain
 their title and time. The wide web layout follows the same poster-strip design.
 Touch toolbar controls have 44 dp minimum targets. Loading states do not imply an
 empty watchlist while sources are still being read.
+
+The watchlist-source menu uses compact rows with service artwork and title counts.
+The focused row is white with black content; a checkmark denotes actual selection,
+not focus. Escape/Back closes the menu and restores the trigger's focus.
 
 ### Service artwork
 
@@ -101,11 +113,11 @@ Historical season requests have their own bounded slots and start with recent
 seasons, allowing newly arriving titles to publish dates without waiting for a
 complete season walk. Metadata for an identical request is coalesced; no titles or
 potentially relevant seasons are silently omitted.
-Android batches up to 20 missing seasons per TMDB request using
+Both clients batch up to 20 missing seasons per TMDB request using
 `append_to_response`, preserving the normal per-season cache keys. Specials and
 overlapping seasons remain included. Missing or malformed appended blocks retry
-independently through the ordinary season endpoint. Batch decoding runs off the UI
-thread; the same five-request global limit and two-season-request limit still apply.
+independently through the ordinary season endpoint. Android batch decoding runs off
+the UI thread; its five-request global limit and two-season-request limit still apply.
 Current shows and recent movie releases are prioritized without excluding other
 titles. Completed per-title month projections, including verified empty results,
 survive process recreation. Adding one watchlist title only computes that title;
@@ -113,8 +125,10 @@ saved results acquire current source memberships and cannot restore removed titl
 Projection keys include profile, media identity, month, language, region, timezone
 and optional Trakt identity. Expiry never exceeds the freshness of the metadata
 used to compute the result. Errors are not saved as successful empty schedules;
-missing optional artwork receives a short recovery interval. Explicit Retry clears
-metadata and projections but retains private full-month previews for outage fallback.
+missing optional artwork receives a short recovery interval. Explicit Retry rereads
+failed services and bypasses metadata/projection caches only for failed titles;
+healthy service snapshots and completed title results remain reusable. Private
+full-month previews remain available for outage fallback.
 After idle warming, adjacent months reuse already fetched metadata without issuing
 extra HTTP requests. Normal month entry still fills every missing title/season.
 Caches are bounded in memory and on disk (4,096 files / 48 MiB maximum).
@@ -123,11 +137,19 @@ the first available release and final complete result remain immediate.
 Older movies have a bounded title queue so later-arriving tracker shows do
 not wait behind hundreds of pending requests. Confirmed HTTP 404 responses are
 remembered for fifteen minutes to avoid repeated failed reads on date/month changes;
-explicit Retry clears this negative cache. Other network errors are not hidden by it.
+explicit Retry bypasses this negative cache for failed titles. Other network errors
+are not hidden by it.
 Changing month, profile or language cancels/replaces the old request. Private
 watchlists are scoped to the current account/profile; public metadata may be cached.
 Android refreshes stale lists on tab entry/resume and reacts to cloud watchlist and
 connection changes.
+
+The web client also persists per-title results, including verified empty months,
+for 30 minutes. Keys partition profiles, connections, locale, region, timezone and
+date range. Current memberships are reapplied when reading cached projections, so
+cached metadata cannot restore removed titles. Storage is bounded to 1,024 records
+and approximately 2 MB. Reads do not renew expiry. Planned Trakt titles can load
+before the watching-show read finishes; a failed read preserves useful partial data.
 
 ## Verification fixtures
 
@@ -241,3 +263,31 @@ overlap when those controls are focused. Topbar bounds and touch spacing are unc
   again returned HTTP 404. Partial results and explicit Retry remain available.
 - Evidence: `artifacts/calendar-incremental-*.log` and
   `artifacts/calendar-preload-tv-tests-fixed.log`. No private account data is committed.
+
+### Validation on 11 October 2026
+
+- Android: all 64 Calendar repository, mapping, incremental-loading and cache unit
+  tests passed. The final x86 sideload debug and instrumentation APKs assembled.
+- A 2 GB Android TV emulator passed all 13 TV Calendar UI scenarios and all three
+  ViewModel lifecycle/retry scenarios. The runner also reported two portrait-only
+  scenarios as skipped; those both passed separately on a 2 GB Android phone
+  emulator. No physical TV was used.
+- Checks cover repeated native remote input, month boundaries, stable selection
+  during loading, five-/six-week layouts, source filtering, focus versus selected
+  checkmarks, episode titles and exact episode-opening callbacks, distinct-title
+  day posters, incomplete metadata, idle cancellation and selective retry recovery.
+- Web: all 1,006 unit tests passed. The production build, including TypeScript
+  validation, succeeded. Edge browser checks passed at 1672 x 940, 1280 x 720,
+  1920 x 1080, 1024 x 768 and 390 x 844, including reduced motion, RTL, empty and
+  failed sources, watching-only accounts, cached loads and selective metadata retry.
+  Existing Library regression checks also passed at desktop, tablet and phone sizes.
+- Emulator and browser UI tests use deterministic artwork/dates and controlled
+  provider adapters; they do not verify this account's current live Trakt results or
+  guarantee instant first-ever network loading. Unit regressions cover fully
+  paginated Trakt watching/hidden lists, season batching, unchanged successful
+  results on retry, persistent empty projections and profile/connection isolation.
+- Final logs are `artifacts/calendar-*-final.log` and
+  `artifacts/calendar-final-confirmed-build.log`. Inspected screenshots are under
+  `artifacts/calendar`, including `android-tv-calendar-final.png`,
+  `android-tv-source-menu-final.png` and `android-phone-final.png`. No production
+  deployment or release APK installation is part of this validation pass.

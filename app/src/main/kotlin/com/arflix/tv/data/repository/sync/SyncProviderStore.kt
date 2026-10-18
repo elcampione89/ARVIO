@@ -369,18 +369,22 @@ class SyncProviderStore @Inject constructor(
     }
 
     suspend fun setSimklAccessToken(token: String?) {
+        setSimklAccessToken(token, profileManager.getProfileIdSync())
+    }
+
+    suspend fun setSimklAccessToken(token: String?, profileId: String) {
         val updatedAt = System.currentTimeMillis()
         context.traktDataStore.edit { prefs ->
             val trimmed = token?.trim().orEmpty()
             if (trimmed.isEmpty()) {
-                prefs.remove(simklAccessTokenKey())
-                prefs.remove(simklWatermarkKey())
+                prefs.remove(simklAccessTokenKeyFor(profileId))
+                prefs.remove(simklWatermarkKeyFor(profileId))
             } else {
-                prefs[simklAccessTokenKey()] = SecureStorage.encrypt(trimmed, SIMKL_TOKEN_ALIAS)
+                prefs[simklAccessTokenKeyFor(profileId)] = SecureStorage.encrypt(trimmed, SIMKL_TOKEN_ALIAS)
             }
         }
         context.settingsDataStore.edit { prefs ->
-            prefs[simklCredentialUpdatedAtKey()] = updatedAt
+            prefs[simklCredentialUpdatedAtKeyFor(profileId)] = updatedAt
         }
     }
 

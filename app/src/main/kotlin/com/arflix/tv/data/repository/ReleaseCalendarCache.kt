@@ -41,7 +41,10 @@ class ReleaseCalendarCache internal constructor(
 
     private val gson = Gson()
     private val fileMutex = Mutex()
-    private var writesSinceTrim = 31
+    private data class CachedFile(val file: File, val bytes: Long, val writtenAt: Long)
+    private var files: MutableMap<String, CachedFile>? = null
+    private val oldestFiles = java.util.TreeSet(compareBy<CachedFile> { it.writtenAt }.thenBy { it.file.name })
+    private var cachedBytes = 0L
 
     // A wrapper permits both object responses and primitive/list metadata without reflection.
     internal suspend fun <T> readValue(key: String, type: Type): T? = withContext(Dispatchers.IO) {
@@ -132,6 +135,8 @@ class ReleaseCalendarCache internal constructor(
     internal suspend fun clearMetadata(): Unit = withContext(Dispatchers.IO) {
         fileMutex.withLock {
             directory.listFiles()?.filter { it.name.startsWith("metadata-") || it.name.startsWith("projection-") }?.forEach { it.delete() }
+            files = null
+            oldestFiles.clear()
         }
     }
 
@@ -160,14 +165,25 @@ class ReleaseCalendarCache internal constructor(
                 if (target.exists()) target.delete()
                 if (!temporary.renameTo(target)) temporary.delete()
                 target.setLastModified(now())
-                if (++writesSinceTrim >= 32) {
-                    writesSinceTrim = 0
-                    var bytes = 0L
-                    directory.listFiles()?.filter { it.extension == "json" }?.sortedByDescending { it.lastModified() }
-                        ?.forEachIndexed { index, file ->
-                            bytes += file.length()
-                            if (index >= 4096 || bytes > 48 * 1024 * 1024L) file.delete()
-                        }
+                // Index once per process instead of stat/sorting thousands of files
+                // repeatedly while a large watchlist is being projected into a month.
+                val index = files ?: directory.listFiles().orEmpty().filter { it.extension == "json" }
+                    .associate { it.name to CachedFile(it, it.length(), it.lastModified()) }.toMutableMap().also {
+                        files = it
+                        cachedBytes = it.values.sumOf { entry -> entry.bytes }
+                        oldestFiles.addAll(it.values)
+                    }
+                index.remove(target.name)?.let { cachedBytes -= it.bytes; oldestFiles.remove(it) }
+                index[target.name] = CachedFile(target, target.length(), target.lastModified()).also {
+                    cachedBytes += it.bytes
+                    oldestFiles.add(it)
+                }
+                while (index.size > 4096 || cachedBytes > 48 * 1024 * 1024L) {
+                    val entry = oldestFiles.pollFirst() ?: break
+                    if (entry.file.delete() || !entry.file.exists()) {
+                        index.remove(entry.file.name)
+                        cachedBytes -= entry.bytes
+                    }
                 }
             } catch (error: CancellationException) { throw error }
             catch (_: Exception) { /* Cache failures must never fail a calendar load. */ }
@@ -182,4 +198,13 @@ class ReleaseCalendarCache internal constructor(
 }
 
 internal fun calendarCacheDigest(value: String): String = MessageDigest.getInstance("SHA-256")
-    .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    .digest(value.toByteArray(Charsets.UTF_8)).let { bytes ->
+        val hex = "0123456789abcdef"
+        val result = CharArray(bytes.size * 2)
+        bytes.forEachIndexed { index, byte ->
+            val unsigned = byte.toInt() and 0xff
+            result[index * 2] = hex[unsigned ushr 4]
+            result[index * 2 + 1] = hex[unsigned and 15]
+        }
+        String(result)
+    }

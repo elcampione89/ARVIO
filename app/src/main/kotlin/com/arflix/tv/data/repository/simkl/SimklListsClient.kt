@@ -69,6 +69,10 @@ class SimklListsClient(
     suspend fun refresh(refreshToken: String): SimklListsGrant = grant(request("oauth2/token", form = mapOf(
         "client_id" to clientId, "grant_type" to "refresh_token", "refresh_token" to refreshToken)))
 
+    suspend fun revoke(token: String) {
+        request("oauth2/revoke", form = mapOf("client_id" to clientId, "token" to token))
+    }
+
     private fun grant(body: JsonObject): SimklListsGrant {
         if (!body.text("token_type").equals("Bearer", true)) throw SimklListsException("invalid_response")
         if (body.text("scope")?.split(' ')?.containsAll(listOf("media:read", "media:write")) != true) throw SimklListsException("invalid_scope")
@@ -147,7 +151,10 @@ class SimklListsClient(
         token?.let { builder.header("Authorization", "Bearer $it") }
         if (form != null) builder.post(FormBody.Builder().apply { form.forEach { (key, value) -> add(key, value) } }.build())
         if (jsonPost) builder.post("{}".toRequestBody("application/json".toMediaType()))
-        http.newCall(builder.build()).execute().use { response ->
+        val call = http.newCall(builder.build())
+        if (path == "oauth2/revoke") call.timeout().timeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        call.execute().use { response ->
+            if (path == "oauth2/revoke" && response.isSuccessful) return@withContext JsonObject()
             val body = runCatching { gson.fromJson(response.body?.string(), JsonObject::class.java) }.getOrNull()
                 ?: throw SimklListsException("invalid_response", response.code)
             val error = body.text("error")

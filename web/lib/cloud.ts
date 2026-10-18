@@ -1121,7 +1121,7 @@ function readCloudSimklToken(root: RawPayload, profileId: string): SimklToken | 
   const accessToken = hasCanonicalCredentialState
     ? selection?.simklAccessToken
     : direct?.access_token ?? direct?.accessToken ?? selection?.simklAccessToken;
-  return accessToken ? { access_token: accessToken } : null;
+  return accessToken && !accessToken.startsWith("simkl_at_") && !accessToken.startsWith("simkl_session_") ? { access_token: accessToken } : null;
 }
 
 export async function pullCloudTrackingSelection(
@@ -1245,7 +1245,7 @@ export async function saveCloudTrackingSelection(
     );
     const incomingSimklAccessToken = selection.simklToken?.access_token;
     const previousSimklAccessToken = previousSelection.simklAccessToken;
-    const writeSimklCredential = !selection.simklToken?.refresh_token && !incomingSimklAccessToken?.startsWith("simkl_at_") && (changedDomains.has("simkl") || Boolean(
+    const writeSimklCredential = !selection.simklToken?.server_session && !selection.simklToken?.refresh_token && !incomingSimklAccessToken?.startsWith("simkl_at_") && !incomingSimklAccessToken?.startsWith("simkl_session_") && (changedDomains.has("simkl") || Boolean(
       incomingSimklAccessToken && incomingSimklAccessToken !== previousSimklAccessToken
     ));
     const defaultMode: TrackingReadMode = selection.provider === "TRAKT"

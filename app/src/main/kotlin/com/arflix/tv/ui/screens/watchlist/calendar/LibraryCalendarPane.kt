@@ -12,6 +12,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -58,7 +60,8 @@ internal fun LibraryCalendarRoute(
     onOpenDetails: (MediaType, Int) -> Unit,
     modifier: Modifier = Modifier,
     onExitUp: () -> Unit = {},
-    viewModel: ReleaseCalendarViewModel = hiltViewModel()
+    viewModel: ReleaseCalendarViewModel = hiltViewModel(),
+    onOpenRelease: ((CalendarRelease) -> Unit)? = null
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -71,7 +74,7 @@ internal fun LibraryCalendarRoute(
         onDispose { lifecycle.removeObserver(observer) }
     }
     LibraryCalendarPane(state, viewModel::selectDate, viewModel::changeMonth,
-        viewModel::selectSource, viewModel::refresh, onOpenDetails, modifier, onExitUp)
+        viewModel::selectSource, viewModel::refresh, onOpenDetails, modifier, onExitUp, onOpenRelease)
 }
 
 /** A single, borderless month surface. Data and focus can be exercised without a network account. */
@@ -84,10 +87,12 @@ fun LibraryCalendarPane(
     onRefresh: () -> Unit,
     onOpenDetails: (MediaType, Int) -> Unit,
     modifier: Modifier = Modifier,
-    onExitUp: () -> Unit = {}
+    onExitUp: () -> Unit = {},
+    onOpenRelease: ((CalendarRelease) -> Unit)? = null
 ) {
     val touch = LocalDeviceType.current.isTouchDevice()
-    val locale = appLocale(LocalAppLanguage.current)
+    val language = LocalAppLanguage.current
+    val locale = remember(language) { appLocale(language) }
     val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val dates = remember(state.month) { calendarMonthDays(state.month) }
     val requesters = remember(dates) { dates.associateWith { FocusRequester() } }
@@ -102,16 +107,17 @@ fun LibraryCalendarPane(
     val selectedReleases = releasesByDate[state.selectedDate].orEmpty()
     val nextReleaseDate = releasesByDate.keys.filter { it > state.selectedDate && YearMonth.from(it) == state.month }.minOrNull()
     val today = LocalDate.now(state.timezone)
-    val hasProblem = state.error != null || state.warnings.isNotEmpty()
+    val hasProblem = state.selectedIncomplete
+    val selectedDate = rememberUpdatedState(state.selectedDate)
+    val selectDate = rememberUpdatedState(onSelectDate)
+    val currentMonth = rememberUpdatedState(state.month)
 
     LaunchedEffect(state.selectedDate, state.selectedSourceId) { releaseRail.scrollToItem(0) }
-    fun openDay() {
+    val openSelectedDay = rememberUpdatedState<() -> Unit> {
         if (selectedReleases.isEmpty()) {
             if (nextReleaseDate != null) emptyAction.requestFocus()
             else if (hasProblem) retryAction.requestFocus()
-            return
-        }
-        focusScope.launch {
+        } else focusScope.launch {
             // The first card may have been recycled after scrolling to later releases.
             releaseRail.scrollToItem(0)
             withFrameNanos { }
@@ -120,13 +126,13 @@ fun LibraryCalendarPane(
     }
 
     LaunchedEffect(Unit) { if (!touch) requesters[state.selectedDate]?.requestFocus() }
-    fun selectAndFocus(date: LocalDate) {
+    val selectAndFocus = remember(touch, requesters) { { date: LocalDate ->
         // Keep remote movement on this month's stable nodes. A spillover cell
         // must not replace the grid while a repeated key is still being handled.
-        if (YearMonth.from(date) != state.month) return
-        if (!touch) requesters[date]?.requestFocus()
-        onSelectDate(date)
-    }
+        if (YearMonth.from(date) == currentMonth.value) {
+            if (!touch) requesters[date]?.requestFocus() else selectDate.value(date)
+        }
+    } }
     val retryModifier = Modifier.testTag("calendar-retry").focusRequester(retryAction)
         .onPreviewKeyEvent { event ->
             if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
@@ -158,36 +164,36 @@ fun LibraryCalendarPane(
                 dates.chunked(7).forEach { week ->
                     Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 4.dp)) {
                         week.forEach { date ->
-                            CalendarDay(date, state.month, releasesByDate[date].orEmpty(), date == state.selectedDate,
+                            CalendarDay(date, state.month, releasesByDate[date].orEmpty(), selectedDate,
                                 state.timezone, locale, compact, date == today,
-                                modifier = Modifier.weight(1f).fillMaxHeight().focusRequester(requesters.getValue(date))
-                                    .focusProperties { canFocus = YearMonth.from(date) == state.month }
+                                modifier = remember(date, requesters, isRtl) { Modifier.weight(1f).fillMaxHeight().focusRequester(requesters.getValue(date))
+                                    .focusProperties { canFocus = YearMonth.from(date) == currentMonth.value }
                                     .onPreviewKeyEvent { event ->
                                         val key = event.key.mirrorHorizontalForRtl(isRtl)
                                         if (key == Key.Enter || key == Key.DirectionCenter || key == Key.NumPadEnter) {
                                             // Keep both halves of OK on the day. Moving focus on key-down
                                             // lets the destination's clickable consume key-up as a click.
-                                            if (event.type == KeyEventType.KeyUp) openDay()
+                                            if (event.type == KeyEventType.KeyUp) openSelectedDay.value()
                                             true
                                         } else if (event.type != KeyEventType.KeyDown) false else when (key) {
                                             Key.DirectionLeft -> { selectAndFocus(date.minusDays(1)); true }
                                             Key.DirectionRight -> { selectAndFocus(date.plusDays(1)); true }
                                             Key.DirectionUp -> {
                                                 val target = date.minusWeeks(1)
-                                                if (YearMonth.from(target) != state.month) monthButton.requestFocus() else selectAndFocus(target)
+                                                if (YearMonth.from(target) != currentMonth.value) monthButton.requestFocus() else selectAndFocus(target)
                                                 true
                                             }
                                             Key.DirectionDown -> {
-                                                if (YearMonth.from(date.plusWeeks(1)) != state.month) {
-                                                    openDay()
+                                                if (YearMonth.from(date.plusWeeks(1)) != currentMonth.value) {
+                                                    openSelectedDay.value()
                                                 } else selectAndFocus(date.plusWeeks(1))
                                                 true
                                             }
                                             else -> false
                                         }
-                                    },
-                                onFocused = { if (!touch && YearMonth.from(date) == state.month && date != state.selectedDate) onSelectDate(date) },
-                                onClick = { onSelectDate(date) })
+                                    } },
+                                onFocused = remember(date, touch) { { if (!touch && YearMonth.from(date) == currentMonth.value && date != selectedDate.value) selectDate.value(date) } },
+                                onClick = remember(date) { { selectDate.value(date) } })
                         }
                     }
                 }
@@ -213,13 +219,13 @@ fun LibraryCalendarPane(
                                     if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
                                         requesters[state.selectedDate]?.requestFocus(); true
                                     } else false
-                                }, onClick = { onOpenDetails(release.media.mediaType, release.media.id) })
+                                }, onClick = { onOpenRelease?.invoke(release) ?: onOpenDetails(release.media.mediaType, release.media.id) })
                     }
                 }
             } else {
                 Column(Modifier.fillMaxWidth().height(if (compact) 140.dp else 130.dp).testTag("calendar-empty-day"),
                     verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(tr(when { state.isLoading -> "Finding your releases…"; state.error != null || (hasProblem && state.watchlistCount == 0) -> "Calendar unavailable"
+                    Text(tr(when { state.isLoading -> "Finding your releases…"; hasProblem -> "Release schedule incomplete"
                         state.watchlistCount == 0 -> "Your watchlist, on the calendar"; else -> "No releases on this day" }), color = Color.White, fontSize = 15.sp,
                         modifier = if (state.isLoading) Modifier.testTag("calendar-loading") else Modifier)
                     if (!state.isLoading && !hasProblem && nextReleaseDate == null) {
@@ -246,16 +252,19 @@ fun LibraryCalendarPane(
     if (showSources) Dialog(onDismissRequest = { showSources = false }) {
         val selectedSourceFocus = remember { FocusRequester() }
         LaunchedEffect(Unit) { selectedSourceFocus.requestFocus() }
-        Column(Modifier.widthIn(max = 360.dp).clip(RoundedCornerShape(18.dp)).background(Color(0xFF141619))
-            .padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(tr("Watchlists"), color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, modifier = Modifier.padding(bottom = 8.dp))
+        Column(Modifier.widthIn(max = 300.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF141619))
+            .padding(12.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(tr("Watchlists"), color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, modifier = Modifier.weight(1f).padding(start = 10.dp))
+                IconButton(onClick = { showSources = false }) { Icon(Icons.Outlined.Close, tr("Close"), tint = Color.White) }
+            }
             state.sources.forEach { source ->
-                CalendarButton(tr(source.label), Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag("calendar-source-${source.id}")
+                CalendarSourceRow(source, source.id == state.selectedSourceId, state.sourceCounts[source.id],
+                    Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag("calendar-source-${source.id}")
                     .then(if (source.id == state.selectedSourceId) Modifier.focusRequester(selectedSourceFocus) else Modifier)
                     .semantics { selected = source.id == state.selectedSourceId },
-                    selected = source.id == state.selectedSourceId, onClick = { onSelectSource(source.id); showSources = false })
+                    onClick = { onSelectSource(source.id); showSources = false })
             }
-            CalendarButton(tr("Close"), Modifier.fillMaxWidth(), onClick = { showSources = false })
         }
     }
 }
@@ -324,23 +333,52 @@ private fun CalendarButton(label: String, modifier: Modifier = Modifier, selecte
     var focused by remember { mutableStateOf(false) }
     val touch = LocalDeviceType.current.isTouchDevice()
     val active = selected || focused
-    Row(modifier.heightIn(min = if (touch) 44.dp else 0.dp).onFocusChanged { focused = it.isFocused }.clip(RoundedCornerShape(30.dp))
-        .background(if (active) Color.White else Color.Transparent).border(.6.dp, if (active) Color.White else Color(0xFF53616D), RoundedCornerShape(30.dp))
+    val shape = RoundedCornerShape(if (dropdown) 6.dp else 30.dp)
+    Row(modifier.heightIn(min = if (touch) 44.dp else 0.dp).onFocusChanged { focused = it.isFocused }.clip(shape)
+        .background(if (active) Color.White else Color.Transparent).border(.6.dp, if (active) Color.White else Color(0xFF53616D), shape)
         .clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(label, color = if (active) Color.Black else Color.White, fontSize = if (touch) 12.sp else 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        Text(label, color = if (active) Color.Black else Color.White, fontSize = if (touch || dropdown) 12.sp else 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false))
         if (dropdown) Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = null, tint = if (active) Color.Black else Color.White, modifier = Modifier.size(15.dp))
     }
 }
 
 @Composable
-private fun CalendarDay(date: LocalDate, month: YearMonth, releases: List<CalendarRelease>, selected: Boolean,
+private fun CalendarSourceRow(source: ReleaseCalendarSource, selected: Boolean, count: Int?, modifier: Modifier, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val foreground = if (focused) Color.Black else Color.White
+    Row(modifier.onFocusChanged { focused = it.isFocused }.clip(RoundedCornerShape(6.dp))
+        .background(if (focused) Color.White else Color.Transparent).clickable(onClick = onClick)
+        .padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        val icon = when (source) {
+            ReleaseCalendarSource.TRAKT -> R.drawable.calendar_trakt_official
+            ReleaseCalendarSource.SIMKL -> R.drawable.calendar_simkl_official
+            ReleaseCalendarSource.MDBLIST -> R.drawable.calendar_mdblist_official
+            else -> null
+        }
+        Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+            if (icon != null) Image(painterResource(icon), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        }
+        Text(tr(source.label), Modifier.weight(1f), color = foreground, fontSize = 13.sp, maxLines = 2)
+        count?.let { Text(it.toString(), color = foreground.copy(.7f), fontSize = 11.sp) }
+        Box(Modifier.size(18.dp)) {
+            if (selected) Icon(Icons.Outlined.Check, tr("Selected"), tint = foreground, modifier = Modifier.testTag("calendar-source-check-${source.id}"))
+        }
+    }
+}
+
+@Composable
+private fun CalendarDay(date: LocalDate, month: YearMonth, releases: List<CalendarRelease>, selectedDate: State<LocalDate>,
     timezone: ZoneId, locale: Locale, compact: Boolean, today: Boolean, modifier: Modifier, onFocused: () -> Unit, onClick: () -> Unit) {
+    // Only the previous/new day observe a changed value, not every artwork cell.
+    val selected by remember(date, selectedDate) { derivedStateOf { selectedDate.value == date } }
     val titleColor = if (selected) Color.Black else Color.White
     val secondary = if (selected) Color(0xFF24313A) else CalendarSecondary
     val background by animateColorAsState(if (selected) Color.White else Color.Transparent, tween(100), label = "calendar-day")
     val first = releases.firstOrNull()
+    val previewTitles = remember(releases) { calendarPreviewTitles(releases) }
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val accessibility = date.format(DateTimeFormatter.ofPattern("EEEE d MMMM yyyy", locale)) +
         (if (today) ", " + tr("Today") else "") +
@@ -367,8 +405,8 @@ private fun CalendarDay(date: LocalDate, month: YearMonth, releases: List<Calend
             } else if (releases.size > 1) {
                 // Busy dates show the actual posters, whether focused or not. Reserve room
                 // for the date and overflow before sizing artwork so six-week months fit.
-                val shown = releases.take(3)
-                val extra = releases.size - shown.size
+                val shown = previewTitles.take(3)
+                val extra = previewTitles.size - shown.size
                 val availableWidth = (maxWidth - 32.dp - 3.dp * (shown.size - 1) - if (extra > 0) 20.dp else 0.dp).coerceAtLeast(1.dp)
                 val posterHeight = minOf((maxHeight - 8.dp).coerceAtLeast(1.dp), availableWidth / shown.size * 1.5f)
                 Row(Modifier.fillMaxSize().padding(start = 27.dp, end = 5.dp, top = 4.dp, bottom = 4.dp),
@@ -420,7 +458,7 @@ private fun CalendarReleaseCard(release: CalendarRelease, timezone: ZoneId, loca
         }
         Text(release.media.title, color = Color.White, fontSize = if (compact) 14.sp else 12.sp, lineHeight = 15.sp,
             fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
-        Text(releaseSubtitle(release, timezone, locale), color = CalendarSecondary, fontSize = if (compact) 11.sp else 10.sp,
+        Text(releaseSubtitle(release, timezone, locale, includeEpisodeTitle = true), color = CalendarSecondary, fontSize = if (compact) 11.sp else 10.sp,
             lineHeight = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(release.sourceIds.mapNotNull { id -> ReleaseCalendarSource.entries.firstOrNull { it.id == id }?.label }
             .joinToString(" + "), color = CalendarSecondary.copy(.85f), fontSize = 8.sp, lineHeight = 11.sp, maxLines = 1)
@@ -431,19 +469,19 @@ private fun CalendarRelease.artwork(): String? = media.episodeStill?.takeIf { it
     ?: media.backdrop?.takeIf { it.isNotBlank() } ?: media.image.takeIf { it.isNotBlank() }
 
 @Composable
-private fun releaseSubtitle(release: CalendarRelease, timezone: ZoneId, locale: Locale, concise: Boolean = false): String {
+private fun releaseSubtitle(release: CalendarRelease, timezone: ZoneId, locale: Locale, concise: Boolean = false, includeEpisodeTitle: Boolean = false): String {
     val time = release.releaseInstant?.atZone(timezone)?.format(DateTimeFormatter.ofPattern("HH:mm", locale)) ?: tr("Time TBA")
     if (concise) return time
     val label = if (release.kind == CalendarReleaseKind.EPISODE) {
         if (release.seasonNumber != null && release.episodeNumber != null) String.format(Locale.ROOT, "S%02d E%02d", release.seasonNumber, release.episodeNumber)
         else tr("Episode")
     } else listOfNotNull(tr(release.kind.label), release.region).joinToString(" · ")
-    return "$label · $time"
+    return listOfNotNull(label, time, release.episodeTitle?.takeIf { includeEpisodeTitle && it.isNotBlank() }).joinToString(" · ")
 }
 
 internal fun calendarMonthDays(month: YearMonth): List<LocalDate> {
     val first = month.atDay(1)
     val start = first.minusDays((first.dayOfWeek.value - 1).toLong())
-    val cells = ((first.dayOfWeek.value - 1 + month.lengthOfMonth() + 6) / 7) * 7
+    val cells = (((first.dayOfWeek.value - 1 + month.lengthOfMonth() + 6) / 7) * 7).coerceAtLeast(35)
     return List(cells) { start.plusDays(it.toLong()) }
 }

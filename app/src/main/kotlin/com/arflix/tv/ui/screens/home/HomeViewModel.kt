@@ -25,7 +25,9 @@ import com.arflix.tv.data.model.MediaType
 import com.arflix.tv.data.model.SportsAddonCapabilities
 import com.arflix.tv.R
 import com.arflix.tv.data.repository.MediaRepository
+import com.arflix.tv.network.OkHttpProvider
 import com.arflix.tv.network.TmdbPriorityDispatcher
+import com.arflix.tv.network.withIptvProviderRequestGuard
 import com.arflix.tv.network.TmdbPriorityDispatcher.Priority
 import com.arflix.tv.data.repository.TraktRepository
 import com.arflix.tv.data.repository.TraktSyncService
@@ -39,6 +41,8 @@ import com.arflix.tv.data.repository.LauncherContinueWatchingRepository
 import com.arflix.tv.data.repository.ProfileManager
 import com.arflix.tv.data.repository.SportsRepository
 import com.arflix.tv.data.repository.StreamRepository
+import com.arflix.tv.data.repository.IptvPlaybackTarget
+import com.arflix.tv.data.repository.IptvPlaybackUrlResolver
 import com.arflix.tv.data.repository.IptvRepository
 import com.arflix.tv.data.repository.HomeServerRepository
 import com.arflix.tv.data.repository.CloudSyncStatus
@@ -210,18 +214,26 @@ internal fun dropCategoriesMissingFromSavedCatalogs(
 }
 
 /**
- * Filters the Favorite TV row according to the "Show IPTV favorites on home" preference.
+ * Applies the "Show IPTV favorites on home" preference to the Favorite TV row.
  *
- * Preserves the user's custom catalog ordering configured in Settings > Catalogs.
+ * Preserves the user's custom catalog ordering configured in Settings > Catalogs. The preference,
+ * not the catalog list, decides whether the row exists: a profile whose list lost the entry (a
+ * Home rebuilt from an imported template hides every built-in row, Favorite TV among them) still
+ * gets its favorites, at the top. Without favorites the row stays empty and is not shown.
  */
 internal fun applyIptvFavoritesPlacement(
     savedCatalogs: List<CatalogConfig>,
     enabled: Boolean
 ): List<CatalogConfig> {
     val favIdx = savedCatalogs.indexOfFirst { it.id == HomeViewModel.FAVORITE_TV_CATEGORY_ID }
-    if (favIdx < 0) return savedCatalogs
-    if (!enabled) return savedCatalogs.filterNot { it.id == HomeViewModel.FAVORITE_TV_CATEGORY_ID }
-    return savedCatalogs
+    if (!enabled) {
+        return if (favIdx < 0) savedCatalogs
+            else savedCatalogs.filterNot { it.id == HomeViewModel.FAVORITE_TV_CATEGORY_ID }
+    }
+    if (favIdx >= 0) return savedCatalogs
+    val favoriteTv = MediaRepository.buildPreinstalledDefaults()
+        .firstOrNull { it.id == HomeViewModel.FAVORITE_TV_CATEGORY_ID } ?: return savedCatalogs
+    return listOf(favoriteTv) + savedCatalogs
 }
 
 /** Landscape Home card widths; the backdrop preload must size its requests like the row. */
@@ -997,6 +1009,32 @@ class HomeViewModel @Inject constructor(
 
     /** Get the stream URL for an IPTV MediaItem. */
     fun getIptvStreamUrl(itemId: Int): String? = iptvChannelMap[itemId]?.streamUrl
+
+    // The same resolver and client limits as the Live TV screen, so a channel previews on Home
+    // exactly when it plays there.
+    private val iptvPlaybackUrlResolver by lazy {
+        IptvPlaybackUrlResolver(
+            OkHttpProvider.playbackClient.newBuilder()
+                .withIptvProviderRequestGuard()
+                .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                .callTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+        )
+    }
+
+    /**
+     * What the hero preview should play for a channel card. An address without a file type
+     * (`.../play/channel`) says nothing about its format; the resolver asks the server once and
+     * caches the answer, while addresses that already show their type are returned as they are.
+     */
+    internal suspend fun resolveIptvPreviewTarget(itemId: Int): IptvPlaybackTarget? {
+        val channel = iptvChannelMap[itemId] ?: return null
+        return runCatching { iptvPlaybackUrlResolver.resolve(channel.streamUrl, channel.requestHeaders) }
+            .onFailure { if (it is CancellationException) throw it }
+            .getOrNull()
+    }
 
     /**
      * Looks up the channels behind IPTV cards this view model didn't build itself. Rows

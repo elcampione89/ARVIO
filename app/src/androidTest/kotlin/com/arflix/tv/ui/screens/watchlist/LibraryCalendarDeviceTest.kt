@@ -56,6 +56,7 @@ class LibraryCalendarDeviceTest {
     private val fixtureLogos = mutableMapOf<Int, String>()
     private var calendar by mutableStateOf(ReleaseCalendarUiState())
     private var opened: Pair<MediaType, Int>? = null
+    private var openedRelease: CalendarRelease? = null
     private var refreshRequests = 0
 
     @Test fun referenceMonthShowsCompleteLibraryShellAndReleaseRail() {
@@ -67,9 +68,9 @@ class LibraryCalendarDeviceTest {
             compose.onNodeWithText("October 2026").assertIsDisplayed()
             compose.onNodeWithTag("calendar-day-2026-09-28").assertIsDisplayed()
             compose.onNodeWithTag("calendar-day-2026-11-01").assertIsDisplayed()
-            compose.onNodeWithTag("calendar-release-selected-episode").assertIsDisplayed()
-            compose.onNodeWithTag("calendar-release-selected-cinema").assertIsDisplayed()
-            compose.onNodeWithTag("calendar-release-selected-digital").assertIsDisplayed()
+            calendar.selectedDayReleases.take(3).forEach { release ->
+                compose.onNodeWithTag("calendar-release-${release.id}").assertIsDisplayed()
+            }
             compose.runOnIdle { assertEquals(5, calendar.selectedDayReleases.size) }
 
             val fullScreen = compose.onNodeWithTag("oled-library").fetchSemanticsNode().boundsInRoot
@@ -105,7 +106,7 @@ class LibraryCalendarDeviceTest {
         compose.runOnIdle { assertEquals("Opening a day must focus its release without activating it", null, opened) }
         key(Key.DirectionCenter)
         compose.runOnIdle { assertEquals(MediaType.TV to 100088, opened) }
-        listOf("selected-cinema", "selected-digital", "selected-physical", "selected-movie").forEach { id ->
+        calendar.selectedDayReleases.drop(1).map { it.id }.forEach { id ->
             key(Key.DirectionRight)
             val card = compose.onNodeWithTag("calendar-release-$id").assertIsFocused()
             val bounds = card.getUnclippedBoundsInRoot()
@@ -177,6 +178,11 @@ class LibraryCalendarDeviceTest {
     @Test fun sourceFilterUpdatesTheSelectedDayWithoutLosingItsDate() {
         show()
         compose.onNodeWithTag("calendar-source-filter").performClick()
+        compose.onNodeWithTag("calendar-source-${ReleaseCalendarSource.TRAKT.id}").performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.onNodeWithTag("calendar-source-trakt").assertIsFocused()
+        compose.onNodeWithTag("calendar-source-check-all", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("calendar-source-check-trakt", useUnmergedTree = true).assertDoesNotExist()
+        capture("calendar-source-menu-current")
         compose.onNodeWithTag("calendar-source-${ReleaseCalendarSource.TRAKT.id}").performClick()
         compose.runOnIdle {
             assertEquals(referenceDate, calendar.selectedDate)
@@ -187,6 +193,38 @@ class LibraryCalendarDeviceTest {
         compose.onNodeWithTag("calendar-release-selected-episode").assertIsDisplayed()
         compose.onNodeWithTag("calendar-release-selected-cinema").assertDoesNotExist()
         capture("calendar-trakt-filter")
+    }
+
+    @Test fun episodeTargetAndTitleSurviveCalendarNavigation() {
+        show()
+        focusDay(referenceDate)
+        key(Key.DirectionCenter)
+        compose.onAllNodes(hasText("Endure and Survive", substring = true)).onFirst().assertIsDisplayed()
+        key(Key.DirectionCenter)
+        compose.runOnIdle {
+            assertEquals(3, openedRelease?.seasonNumber)
+            assertEquals(6, openedRelease?.episodeNumber)
+            assertEquals("Endure and Survive", openedRelease?.episodeTitle)
+        }
+    }
+
+    @Test fun failedMetadataNeverClaimsTheDayHasNoReleases() {
+        show(configure = { it.copy(entries = emptyList(), warnings = listOf("Metadata unavailable"),
+            incompleteSourceIds = setOf(ReleaseCalendarSource.TRAKT.id), watchlistCount = 8) })
+        compose.onNodeWithText("Release schedule incomplete").assertIsDisplayed()
+        compose.onNodeWithText("No releases on this day").assertDoesNotExist()
+        focusDay(referenceDate)
+        key(Key.DirectionCenter)
+        compose.onNodeWithTag("calendar-retry").assertIsFocused()
+        capture("calendar-incomplete-current")
+    }
+
+    @Test fun batchEpisodesKeepEveryReleaseWithoutRepeatingDayPosters() {
+        show(configure = { state -> state.copy(entries = state.entries + state.entries.first { it.id == "selected-episode" }
+            .copy(id = "batch-episode-seven", episodeNumber = 7)) })
+        focusDay(referenceDate)
+        assertPosterStrip(referenceDate, 3, "+2")
+        compose.runOnIdle { assertEquals(6, calendar.selectedDayReleases.size) }
     }
 
     @Test fun phoneCompactLayoutKeepsMonthAndReleasesUsable() {
@@ -201,7 +239,11 @@ class LibraryCalendarDeviceTest {
         compose.onNodeWithText("Trakt + SIMKL", useUnmergedTree = true).assertIsDisplayed()
         capture("calendar-phone-releases")
         compose.onNodeWithTag("calendar-release-selected-episode").performClick()
-        compose.runOnIdle { assertEquals(MediaType.TV to 100088, opened) }
+        compose.runOnIdle {
+            assertEquals(MediaType.TV to 100088, opened)
+            assertEquals(3, openedRelease?.seasonNumber)
+            assertEquals(6, openedRelease?.episodeNumber)
+        }
     }
 
     @Test fun sixWeekMonthKeepsReleaseCountsVisibleAndFocusStaysWithinMonth() {
@@ -373,6 +415,7 @@ class LibraryCalendarDeviceTest {
                         viewModel = viewModel,
                         currentProfile = Profile(id = "calendar-fixture", name = "A", avatarId = 1, avatarColor = 0xFF2475BD),
                         onNavigateToDetails = { type, id -> opened = type to id },
+                        onCalendarOpenRelease = { release -> openedRelease = release; opened = release.media.mediaType to release.media.id },
                         calendarStateOverride = calendar,
                         onCalendarSelectDate = { date -> calendar = calendar.copy(selectedDate = date, month = YearMonth.from(date)) },
                         onCalendarChangeMonth = { delta ->
@@ -432,6 +475,7 @@ class LibraryCalendarDeviceTest {
                 kind = kind,
                 seasonNumber = if (kind == CalendarReleaseKind.EPISODE) 3 else null,
                 episodeNumber = episode,
+                episodeTitle = if (id == "selected-episode") "Endure and Survive" else null,
                 sourceIds = sources,
                 logoUrl = fixtureLogos[mediaId]
             )
@@ -498,7 +542,8 @@ class LibraryCalendarDeviceTest {
 
     private fun capture(name: String) {
         compose.waitForIdle()
-        val bitmap = compose.onNodeWithTag("oled-library").captureToImage().asAndroidBitmap()
+        val node = if (name.contains("source-menu")) compose.onNode(isDialog()) else compose.onNodeWithTag("oled-library")
+        val bitmap = node.captureToImage().asAndroidBitmap()
         try {
             File(compose.activity.getExternalFilesDir(null), "$name.png").outputStream().use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)

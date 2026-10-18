@@ -24,6 +24,26 @@ function cloudHarness(initial, disk = storage()) {
   return { cloud, disk, sent };
 }
 
+test('SIMKL server-session markers never enter cloud credentials or replace another device V1 grant', async () => {
+  const h = cloudHarness({ simklTokens: { p: { access_token: 'legacy-device-token' } },
+    mdbListSyncByProfile: { p: { simklAccessToken: 'legacy-device-token', simklCredentialUpdatedAt: 100 } } });
+  await h.cloud.saveCloudTrackingSelection(auth, 'p', { provider: 'SIMKL', simklToken: {
+    access_token: 'simkl_session_private-browser', server_session: true, connection_id: 'private-browser'
+  }, changedDomains: ['routing', 'simkl'] });
+  assert.equal(JSON.stringify(h.sent).includes('simkl_session_'), false);
+  assert.equal(h.sent[0].simklTokens.p.access_token, 'legacy-device-token');
+  assert.equal(h.sent[0].mdbListSyncByProfile.p.simklAccessToken, 'legacy-device-token');
+  assert.equal(h.sent[0].mdbListSyncByProfile.p.writeToSimkl, true);
+});
+
+test('cloud restores V1 only, never V2 credentials or browser session markers', async () => {
+  for (const token of ['legacy-device-token', 'simkl_at_secret', 'simkl_session_other-browser']) {
+    const h = cloudHarness({ simklTokens: { p: { access_token: token } } });
+    const snapshot = await h.cloud.pullCloudTrackingSelection(auth, 'p');
+    assert.equal(snapshot.simklToken?.access_token ?? null, token === 'legacy-device-token' ? token : null);
+  }
+});
+
 test('cloud removal survives a stale snapshot with a freshly regenerated addedAt', async () => {
   const h = cloudHarness({ watchlistByProfile: { p: [cloudItem(1), cloudItem(2)] },
     watchlistChangesByProfile: { p: { 'movie:1': { updatedAt: 200, removed: true } } } });

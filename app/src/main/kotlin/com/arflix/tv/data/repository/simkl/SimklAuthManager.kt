@@ -107,9 +107,16 @@ class SimklAuthManager @Inject constructor(
 
     suspend fun disconnect() {
         cancelPinAuth()
-        v2?.disconnect()
-        syncProviderStore.setSimklAccessToken(null)
-        syncProviderStore.onProviderDisconnected(SyncProvider.SIMKL)
+        val profile = v2?.profileId()
+        if (v2 != null && profile != null) {
+            v2.disconnect {
+                syncProviderStore.setSimklAccessToken(null, profile)
+                syncProviderStore.onProviderDisconnected(SyncProvider.SIMKL, profile)
+            }
+        } else {
+            syncProviderStore.setSimklAccessToken(null)
+            syncProviderStore.onProviderDisconnected(SyncProvider.SIMKL)
+        }
     }
 }
 

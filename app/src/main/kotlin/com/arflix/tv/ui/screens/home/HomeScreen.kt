@@ -519,6 +519,15 @@ private fun isActionableHomeItem(item: MediaItem?): Boolean {
     return item != null && item.hasOpenableId && !item.isPlaceholder
 }
 
+/**
+ * Whether the hero preview plays [url] as HLS. Everything the address alone used to qualify still
+ * does; [serverSaysHls] adds what the server reported for an address without a file type.
+ */
+internal fun homeHeroUsesHls(url: String, serverSaysHls: Boolean): Boolean {
+    val lower = url.lowercase()
+    return serverSaysHls || lower.contains(".m3u8") || lower.contains("/hls") || lower.contains("format=hls")
+}
+
 @androidx.compose.runtime.Immutable
 private data class HomeHeroPlaybackHandles(
     val player: ExoPlayer,
@@ -1147,17 +1156,23 @@ fun HomeScreen(
         if (heroVideoUrl != null) {
             val handles = heroPlaybackHandles ?: return@LaunchedEffect
             if (preparedHeroVideoUrl != heroVideoUrl) {
+                // Channel cards: ask the server what an address without a file type serves, as
+                // the Live TV screen does. Other previews keep reading the address alone.
+                val iptvTarget = displayHeroItem
+                    ?.takeIf { isHeroIptv }
+                    ?.let { viewModel.resolveIptvPreviewTarget(it.id) }
                 player?.stop()
                 player?.clearMediaItems()
+                val useHls = homeHeroUsesHls(heroVideoUrl, iptvTarget?.isHls == true)
                 val mi = androidx.media3.common.MediaItem.Builder()
-                    .setUri(heroVideoUrl)
+                    .setUri(iptvTarget?.url ?: heroVideoUrl)
+                    .apply { if (!useHls) iptvTarget?.mimeType?.let { setMimeType(it) } }
                     .setLiveConfiguration(
                         androidx.media3.common.MediaItem.LiveConfiguration.Builder()
                             .setMinPlaybackSpeed(1.0f).setMaxPlaybackSpeed(1.0f)
                             .setTargetOffsetMs(4_000).build()
                     ).build()
-                val lower = heroVideoUrl.lowercase()
-                if (lower.contains(".m3u8") || lower.contains("/hls") || lower.contains("format=hls")) {
+                if (useHls) {
                     player?.setMediaSource(handles.hlsFactory.createMediaSource(mi))
                 } else {
                     player?.setMediaItem(mi)

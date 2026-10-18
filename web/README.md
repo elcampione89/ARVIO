@@ -68,7 +68,7 @@ on your network or the internet.
 | --- | --- | --- |
 | TMDB | `TMDB_API_KEY` in `.env.local`; use the v3 API key, not the bearer token | For built-in movie/show metadata |
 | Trakt | `TRAKT_CLIENT_ID` and `TRAKT_CLIENT_SECRET`, then connect in Settings | Optional |
-| Simkl | `SIMKL_CLIENT_ID`; `SIMKL_CLIENT_SECRET` for token exchange, then connect in Settings | Optional; PIN login uses the client ID |
+| Simkl | `SIMKL_V2_CLIENT_ID`, then connect in Settings; retain V1 ID/secret only for existing V1 connections | Optional; V2 PIN login needs no secret |
 | MDBList | Enter your own key in Settings > Accounts | Optional |
 | Telegram | `NEXT_PUBLIC_TELEGRAM_API_ID` and `NEXT_PUBLIC_TELEGRAM_API_HASH`, then connect your account | Optional |
 | Plex / Emby / Jellyfin | Connect your server in Settings | Optional |
@@ -89,6 +89,13 @@ configured integrations still contact their respective third-party services.
 own watched/watchlist data when connected, but they do not sync ARVIO profiles,
 IPTV settings, addons or the complete app state. Clearing browser site data
 removes local data. The Docker filesystem is not a backup of browser profiles.
+
+SIMKL V2 access/refresh tokens are the exception to browser-local storage: they
+stay encrypted on the server, linked to a profile-specific HttpOnly cookie.
+Compose persists these sessions in the `simkl-sessions` volume across container
+rebuilds. For Node installations, preserve `.data/simkl-sessions` or set the
+server-only `SIMKL_SESSION_DIR` to a private, writable persistent directory.
+Back up this directory securely; clearing site cookies requires reconnecting SIMKL.
 
 ## Maintainers: Official Hosted Service
 

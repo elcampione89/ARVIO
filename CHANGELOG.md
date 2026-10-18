@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.2] - 2026-10-12
+
+- New artwork release Calendar across Android and web, with tracker/local watchlists, timezone-aware dates, exact episode navigation, consistent Library tabs, stable remote focus, persistent schedules, batched season loading and anime coverage.
+- Community add-on browser, TMDB page catalogs, native add-on-only titles, custom catalog types, progressive search, fresh imports and collection-style catalog See all pages.
+- Restored optional official YouTube Home/card previews, faster Favorite TV previews, background playback cleanup, on-focus guide refresh, recent searches and selectable Fire TV search results.
+- Refined episode cards with real episode IMDb ratings, compact menus/settings/source controls, cleaner focus borders and the current episode synopsis in the paused player.
+- Recently played source pinning and autoplay preference, stable source scrolling, improved frame-rate detection, non-IDR IPTV playback and final progress saving.
+- Resilient Emby authentication, negotiated Jellyfin/Silo playback routes and low-memory-aware hearing-sync defaults.
+- SIMKL AUTH V2 and custom lists, more accurate Continue Watching, 90% watched scrobbles, encrypted server-side web sessions, grant revocation and reliable watchlist deletions across Cloud sync.
+- Web source/audio/subtitle fixes, Android-aligned default catalogs, Collection Studio, safe account migration/setup, partner links, website guides and improved Docker/Unraid preview packaging.
+- Contributors: [@silentbil](https://github.com/silentbil), [@test01203](https://github.com/test01203) (koby455) and [@Himanth-reddy](https://github.com/Himanth-reddy). AI author/co-author credits are retained in the full history.
+- Version 2.2, version code 319. [Release notes](releases/v2.2/RELEASE_NOTES.md), [merged contributions](releases/v2.2/MERGED_CONTRIBUTIONS.md), [complete commit history](releases/v2.2/COMMIT_CHANGELOG.md).
+
 ## [2.0.1] - 2026-09-30
 
 - Custom collection imports and refreshed built-in collections, cinematic title previews, clearlogos, IMDb/service branding, faster metadata loading, correct media-type pagination and responsive Android/web grids.

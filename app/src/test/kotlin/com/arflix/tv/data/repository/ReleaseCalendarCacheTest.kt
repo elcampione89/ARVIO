@@ -17,6 +17,28 @@ import org.junit.rules.TemporaryFolder
 class ReleaseCalendarCacheTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `digest remains compatible with existing disk cache filenames`() {
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", calendarCacheDigest("abc"))
+        assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", calendarCacheDigest(""))
+    }
+
+    @Test fun `indexed cache enforces file limit after recreation updates and invalidation`() = runBlocking {
+        var time = System.currentTimeMillis()
+        val directory = temporary.newFolder()
+        val cache = ReleaseCalendarCache(directory) { time++ }
+        repeat(4100) { cache.writeValue("item:$it", "fixture") }
+        assertEquals(4096, directory.listFiles()!!.size)
+        assertNull(cache.readValue<String>("item:0", String::class.java))
+        val recreated = ReleaseCalendarCache(directory) { time++ }
+        recreated.writeValue("item:4099", "updated")
+        assertEquals(4096, directory.listFiles()!!.size)
+        assertEquals("updated", recreated.readValue<String>("item:4099", String::class.java))
+        recreated.clearMetadata()
+        recreated.writeValue("new", "retained")
+        assertEquals(1, directory.listFiles()!!.size)
+        assertEquals("retained", recreated.readValue<String>("new", String::class.java))
+    }
+
     @Test fun `month survives process recreation with exact artwork timestamps and provenance`() = runBlocking {
         val directory = temporary.newFolder()
         val preview = CalendarMonthPreview(listOf(CalendarRelease(

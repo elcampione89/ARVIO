@@ -84,7 +84,8 @@ fun WatchlistScreen(
     onCalendarChangeMonth: (Long) -> Unit = {},
     onCalendarSelectSource: (String) -> Unit = {},
     onCalendarRefresh: () -> Unit = {},
-    calendarViewModel: ReleaseCalendarViewModel? = null
+    calendarViewModel: ReleaseCalendarViewModel? = null,
+    onCalendarOpenRelease: ((com.arflix.tv.data.model.CalendarRelease) -> Unit)? = null
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val servers by viewModel.libraryState.collectAsStateWithLifecycle()
@@ -229,9 +230,9 @@ fun WatchlistScreen(
                 if (calendarStateOverride != null) LibraryCalendarPane(
                     state = calendarStateOverride, onSelectDate = onCalendarSelectDate,
                     onChangeMonth = onCalendarChangeMonth, onSelectSource = onCalendarSelectSource,
-                    onRefresh = onCalendarRefresh, onOpenDetails = onNavigateToDetails,
+                    onRefresh = onCalendarRefresh, onOpenDetails = onNavigateToDetails, onOpenRelease = onCalendarOpenRelease,
                     modifier = Modifier.weight(1f), onExitUp = { calendarTab.requestFocus() })
-                else LibraryCalendarRoute(onOpenDetails = onNavigateToDetails,
+                else LibraryCalendarRoute(onOpenDetails = onNavigateToDetails, onOpenRelease = onCalendarOpenRelease,
                     modifier = Modifier.weight(1f), onExitUp = { calendarTab.requestFocus() },
                     viewModel = calendarViewModel ?: hiltViewModel())
             } else {

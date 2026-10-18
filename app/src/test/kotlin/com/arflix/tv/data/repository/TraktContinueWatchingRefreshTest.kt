@@ -42,6 +42,7 @@ class TraktContinueWatchingRefreshTest {
     }
 
     private val api = mockk<TraktApi>(relaxed = true)
+    private val tmdb = mockk<TmdbApi>()
     private lateinit var repository: TraktRepository
     private val stamp = "2026-09-23T10:00:00Z"
     private val show = TraktShowInfo("Show", 2026, TraktIds(trakt = 10, tmdb = 10))
@@ -63,7 +64,6 @@ class TraktContinueWatchingRefreshTest {
             coEvery { readProviders(any()) } returns emptySet()
             coEvery { getProvider() } returns SyncProvider.TRAKT
         }
-        val tmdb = mockk<TmdbApi>()
         coEvery { tmdb.getTvDetails(any(), any(), any(), any()) } throws IllegalStateException("No artwork in fixture")
         repository = TraktRepository(RuntimeEnvironment.getApplication(), api, tmdb, OkHttpClient(),
             Provider { mockk(relaxed = true) }, profiles, mockk(relaxed = true), providers,
@@ -83,6 +83,21 @@ class TraktContinueWatchingRefreshTest {
 
     @After fun tearDown() {
         unmockkStatic("com.arflix.tv.util.DataStoresKt")
+    }
+
+    @Test fun calendarResolvesAnimeWithOnlyTvdbIdentityWithoutLoadingProgress() = runBlocking {
+        val anime = TraktShowInfo("Anime fixture", 2026, TraktIds(trakt = 50, tvdb = 900))
+        coEvery { api.getWatchedShows(any(), any(), any(), any(), any(), any()) } answers {
+            if (arg<Int?>(3) == 1) listOf(TraktWatchedShow(1, stamp, stamp, anime, emptyList())) else emptyList()
+        }
+        coEvery { tmdb.findByExternalId("900", any(), "tvdb_id") } returns
+            TmdbFindResponse(tvResults = listOf(TmdbFindItem(id = 700)))
+        coEvery { tmdb.getTvDetails(700, any(), any(), any()) } returns
+            TmdbTvDetails(id = 700, name = "Anime fixture", firstAirDate = "2026-01-01")
+        val item = repository.getCalendarWatchingShows().single()
+        assertEquals(700, item.id)
+        assertEquals(50, item.traktId)
+        coVerify(exactly = 0) { api.getShowProgress(any(), any(), any(), any(), any(), any(), any()) }
     }
 
     @Test fun refreshReadsActivePlaybackEvenWhenActivityDidNotChange() = runBlocking {

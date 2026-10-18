@@ -11,8 +11,13 @@ services:
       NEXT_PUBLIC_PAYWALL_ENABLED: "false"
       NEXT_TELEMETRY_DISABLED: "1"
     init: true
+    volumes:
+      - simkl-sessions:/app/.data/simkl-sessions
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+volumes:
+  simkl-sessions:

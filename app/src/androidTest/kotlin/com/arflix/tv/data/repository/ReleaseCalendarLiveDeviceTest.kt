@@ -8,6 +8,12 @@ import com.arflix.tv.di.RepositoryAccessEntryPoint
 import dagger.hilt.android.EntryPointAccessors
 import java.time.YearMonth
 import java.time.ZoneId
+import kotlin.coroutines.Continuation
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Proxy
+import java.util.Collections
+import com.arflix.tv.data.api.TmdbApi
+import com.arflix.tv.data.api.TraktApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
@@ -22,10 +28,49 @@ class ReleaseCalendarLiveDeviceTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val access = EntryPointAccessors.fromApplication(instrumentation.targetContext, RepositoryAccessEntryPoint::class.java)
         val repository = access.releaseCalendarRepository()
+        val requests = Collections.synchronizedList(mutableListOf<String>())
+        val api = access.tmdbApi()
+        val traced = Proxy.newProxyInstance(TmdbApi::class.java.classLoader, arrayOf(TmdbApi::class.java)) { _, method, values ->
+            val args: Array<Any?> = values?.map { it }?.toTypedArray() ?: emptyArray()
+            val started = SystemClock.elapsedRealtime()
+            fun record(error: Throwable? = null) {
+                requests += "${method.name}:${args.firstOrNull()} ${SystemClock.elapsedRealtime() - started}ms ${if (error is retrofit2.HttpException) "HTTP_${error.code()}" else error?.javaClass?.simpleName ?: "OK"}"
+            }
+            @Suppress("UNCHECKED_CAST")
+            val continuation = args.lastOrNull() as? Continuation<Any?>
+            if (continuation != null) args[args.lastIndex] = object : Continuation<Any?> {
+                override val context = continuation.context
+                override fun resumeWith(result: Result<Any?>) { record(result.exceptionOrNull()); continuation.resumeWith(result) }
+            }
+            try {
+                method.invoke(api, *args).also { if (it !== kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED) record() }
+            } catch (error: InvocationTargetException) { record(error.targetException); throw error.targetException }
+        } as TmdbApi
+        ReleaseCalendarRepository::class.java.getDeclaredField("tmdbApi").apply { isAccessible = true }.set(repository, traced)
+        val traktRepository = access.traktRepository()
+        val traktField = TraktRepository::class.java.getDeclaredField("traktApi").apply { isAccessible = true }
+        val traktApi = traktField.get(traktRepository) as TraktApi
+        val tracedTrakt = Proxy.newProxyInstance(TraktApi::class.java.classLoader, arrayOf(TraktApi::class.java)) { _, method, values ->
+            val args: Array<Any?> = values?.map { it }?.toTypedArray() ?: emptyArray()
+            val started = SystemClock.elapsedRealtime()
+            fun record(error: Throwable? = null) {
+                requests += "trakt:${method.name} ${SystemClock.elapsedRealtime() - started}ms ${if (error is retrofit2.HttpException) "HTTP_${error.code()}" else error?.javaClass?.simpleName ?: "OK"}"
+            }
+            @Suppress("UNCHECKED_CAST")
+            val continuation = args.lastOrNull() as? Continuation<Any?>
+            if (continuation != null) args[args.lastIndex] = object : Continuation<Any?> {
+                override val context = continuation.context
+                override fun resumeWith(result: Result<Any?>) { record(result.exceptionOrNull()); continuation.resumeWith(result) }
+            }
+            try { method.invoke(traktApi, *args).also { if (it !== kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED) record() } }
+            catch (error: InvocationTargetException) { record(error.targetException); throw error.targetException }
+        } as TraktApi
+        traktField.set(traktRepository, tracedTrakt)
+        ReleaseCalendarRepository::class.java.getDeclaredField("traktApi").apply { isAccessible = true }.set(repository, tracedTrakt)
         val profile = access.profileManager().getProfileIdSync()
+        if (InstrumentationRegistry.getArguments().getString("calendarInvalidate") == "true") repository.invalidateMetadata()
         val month = YearMonth.now()
         val timezone = ZoneId.systemDefault()
-        repository.invalidateMetadata()
         val start = SystemClock.elapsedRealtime()
         var firstReleaseMs: Long? = null
         var lastReleaseMs = 0L
@@ -41,6 +86,10 @@ class ReleaseCalendarLiveDeviceTest {
             discovered.addAll(ids)
         }
         val coldMs = SystemClock.elapsedRealtime() - start
+        instrumentation.sendStatus(0, Bundle().apply {
+            putString("stream", "CALENDAR_SOURCES ${lists.items.map { (source, items) -> "${source.id}=${items.size}" }} warnings=${lists.warnings}\n" +
+                "CALENDAR_TRAKT_REQUESTS ${requests.filter { it.startsWith("trakt:") }.joinToString("; ")}\n")
+        })
         assertTrue("This live test requires configured watchlist titles", mergeCalendarWatchlists(lists.items).isNotEmpty())
         assertTrue("The configured account must have releases this month", cold.entries.isNotEmpty())
         val warmStart = SystemClock.elapsedRealtime()
@@ -55,6 +104,23 @@ class ReleaseCalendarLiveDeviceTest {
                 "coldFirst=${firstReleaseMs}ms coldLastRelease=${lastReleaseMs}ms coldComplete=${coldMs}ms warmFirst=${warmFirstMs}ms warmComplete=${warmMs}ms " +
                 "providerWarnings=${lists.warnings.size} metadataWarnings=${cold.warnings.size - lists.warnings.size}\n")
         })
+        for (offset in InstrumentationRegistry.getArguments().getString("calendarOffsets", "1,2").split(",").map(String::toLong)) {
+            requests.clear()
+            val nextMonth = month.plusMonths(offset)
+            val nextStart = SystemClock.elapsedRealtime()
+            val next = repository.loadMonth(lists, nextMonth, timezone, "NL")
+            val elapsed = SystemClock.elapsedRealtime() - nextStart
+            instrumentation.sendStatus(0, Bundle().apply {
+                putString("stream", "CALENDAR_NEW_MONTH month=$nextMonth complete=${elapsed}ms releases=${next.entries.size} warnings=${next.warnings.size}\n" +
+                    "CALENDAR_REQUESTS ${requests.joinToString("; ")}\n" +
+                    next.entries.joinToString("\n") { "CALENDAR_ENTRY ${it.date} ${it.releaseInstant} ${it.media.id} ${it.media.title} S${it.seasonNumber}E${it.episodeNumber}" } + "\n")
+            })
+            val repeated = repository.loadMonth(lists, nextMonth, timezone, "NL")
+            assertEquals(next.entries.map { it.id }.toSet(), repeated.entries.map { it.id }.toSet())
+            if (InstrumentationRegistry.getArguments().getString("calendarRequireFast") == "true") {
+                assertTrue("New month took ${elapsed}ms (target <10000ms)", elapsed < 10_000)
+            }
+        }
         val failedTitles = mergeCalendarWatchlists(lists.items).filter { title ->
             cold.warnings.any { it == "Release dates for ${title.media.title} are unavailable." }
         }

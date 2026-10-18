@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.arflix.tv.data.model.CalendarRelease
 import com.arflix.tv.data.model.ReleaseCalendarSource
+import com.arflix.tv.data.model.MediaType
+import com.arflix.tv.data.model.calendarReleaseOrder
 import com.arflix.tv.data.repository.CalendarWatchlists
 import com.arflix.tv.data.repository.CalendarMonthPreview
 import com.arflix.tv.data.repository.CalendarLoadProgress
@@ -54,11 +56,16 @@ data class ReleaseCalendarUiState(
     val timezone: ZoneId = ZoneId.systemDefault(),
     val warnings: List<String> = emptyList(),
     val watchlistCount: Int = 0,
+    val sourceCounts: Map<String, Int> = emptyMap(),
+    val incompleteSourceIds: Set<String> = emptySet(),
+    val failedTitleKeys: Set<Pair<MediaType, Int>> = emptySet(),
     val region: String = Locale.getDefault().country.ifBlank { "US" }
 ) {
     val visibleEntries: List<CalendarRelease> get() = entries.filter {
         selectedSourceId == ReleaseCalendarSource.ALL.id || selectedSourceId in it.sourceIds
-    }
+    }.sortedWith(calendarReleaseOrder)
+    val selectedIncomplete: Boolean get() = error != null || selectedSourceId in incompleteSourceIds ||
+        (selectedSourceId == ReleaseCalendarSource.ALL.id && (warnings.isNotEmpty() || incompleteSourceIds.isNotEmpty()))
     val releasesByDate: Map<LocalDate, List<CalendarRelease>> get() = visibleEntries.groupBy { it.date }
     val selectedDayReleases: List<CalendarRelease> get() = visibleEntries.filter { it.date == selectedDate }
     val selectedSource: ReleaseCalendarSource get() = sources.firstOrNull { it.id == selectedSourceId }
@@ -123,7 +130,7 @@ class ReleaseCalendarViewModel @Inject constructor(
                     requestId++
                     sourceSnapshot = null
                     previewSourceCounts = emptyMap()
-                    _uiState.update { it.copy(entries = emptyList(), warnings = emptyList(), region = ContentRating.regionOf(languageTag)) }
+                    _uiState.update { it.copy(entries = emptyList(), warnings = emptyList(), failedTitleKeys = emptySet(), incompleteSourceIds = emptySet(), sourceCounts = emptyMap(), region = ContentRating.regionOf(languageTag)) }
                     _uiState.update { it.copy(isLoading = true) }
                     if (foreground) reload(forceSources = true)
                 }
@@ -135,7 +142,10 @@ class ReleaseCalendarViewModel @Inject constructor(
         val changedMonth = YearMonth.from(date) != _uiState.value.month
         _uiState.update { it.copy(selectedDate = date, month = YearMonth.from(date),
             entries = if (changedMonth) emptyList() else it.entries,
-            warnings = if (changedMonth) emptyList() else it.warnings) }
+            warnings = if (changedMonth) emptyList() else it.warnings,
+            error = if (changedMonth) null else it.error,
+            failedTitleKeys = if (changedMonth) emptySet() else it.failedTitleKeys,
+            incompleteSourceIds = if (changedMonth) emptySet() else it.incompleteSourceIds) }
         if (changedMonth) reload()
     }
 
@@ -145,7 +155,7 @@ class ReleaseCalendarViewModel @Inject constructor(
         if (month == _uiState.value.month) return
         _uiState.update { state ->
             state.copy(month = month, selectedDate = month.atDay(state.selectedDate.dayOfMonth.coerceAtMost(month.lengthOfMonth())),
-                entries = emptyList(), warnings = emptyList(), error = null)
+                entries = emptyList(), warnings = emptyList(), error = null, failedTitleKeys = emptySet(), incompleteSourceIds = emptySet())
         }
         reload()
     }
@@ -156,9 +166,8 @@ class ReleaseCalendarViewModel @Inject constructor(
     }
 
     fun refresh() {
-        sourceSnapshot = null
         _uiState.update { it.copy(timezone = ZoneId.systemDefault()) }
-        reload(forceSources = true, forceRefresh = true)
+        reload(forceSources = true, retryFailures = true)
     }
 
     /** Safe to call on tab entry and ON_RESUME; fresh/in-flight results are reused. */
@@ -230,14 +239,17 @@ class ReleaseCalendarViewModel @Inject constructor(
             val sources = (available + if (complete) emptyList() else state.sources).distinct()
             val selectedId = state.selectedSourceId.takeIf { id -> sources.any { it.id == id } }
                 ?: ReleaseCalendarSource.ALL.id
-            state.copy(sources = sources, selectedSourceId = selectedId, watchlistCount = countForSource(selectedId))
+            state.copy(sources = sources, selectedSourceId = selectedId, watchlistCount = countForSource(selectedId),
+                sourceCounts = sources.associate { it.id to countForSource(it.id) })
         }
     }
 
-    private fun reload(forceSources: Boolean = false, forceRefresh: Boolean = false, background: Boolean = false) {
+    private fun reload(forceSources: Boolean = false, forceRefresh: Boolean = false, background: Boolean = false, retryFailures: Boolean = false) {
         val profileId = activeProfileId ?: return
         if (privateCacheIdentity.isBlank()) return
         val sequence = ++requestId
+        val retryTitles = if (retryFailures) _uiState.value.failedTitleKeys else emptySet()
+        val reusableSources = if (retryFailures && sourceLoadedAt != 0L) sourceSnapshot else null
         loadJob?.cancel()
         backgroundLoad = background
         loadJob = viewModelScope.launch {
@@ -255,7 +267,11 @@ class ReleaseCalendarViewModel @Inject constructor(
                     if (lastUiPublish == 0L || now - lastUiPublish >= 100L ||
                         (_uiState.value.entries.isEmpty() && progress.month.entries.isNotEmpty())) {
                         lastUiPublish = now
-                        _uiState.update { it.copy(entries = mergeCalendarPreview(preview?.entries.orEmpty(), progress), warnings = progress.month.warnings) }
+                        val failedSources = progress.watchlists.failedSources.map { it.id }.toSet() +
+                            progress.watchlists.items.filterValues { items -> items.any { (it.mediaType to it.id) in progress.month.failedTitles } }.keys.map { it.id } +
+                            progress.watchlists.items.keys.filter { source -> progress.watchlists.warnings.any { it.startsWith(source.label) } }.map { it.id }
+                        _uiState.update { it.copy(entries = mergeCalendarPreview(preview?.entries.orEmpty(), progress), warnings = progress.month.warnings,
+                            incompleteSourceIds = failedSources, failedTitleKeys = progress.month.failedTitles) }
                     }
                 }
                 if (sequence != requestId || profileManager.getProfileIdSync() != profileId) return@launch
@@ -264,7 +280,8 @@ class ReleaseCalendarViewModel @Inject constructor(
                     _uiState.update { state -> state.copy(
                         entries = preview.entries,
                         sources = ReleaseCalendarSource.entries.filter { it.id in preview.sourceCounts || it == ReleaseCalendarSource.ALL || it == ReleaseCalendarSource.ARVIO },
-                        watchlistCount = preview.sourceCounts[state.selectedSourceId] ?: 0
+                        watchlistCount = preview.sourceCounts[state.selectedSourceId] ?: 0,
+                        sourceCounts = preview.sourceCounts
                     ) }
                 }
                 if (forceRefresh) repository.invalidateMetadata()
@@ -273,7 +290,7 @@ class ReleaseCalendarViewModel @Inject constructor(
                 }
                 val result = if (snapshot != null) {
                     updateSources(snapshot, complete = true)
-                    withContext(Dispatchers.Default) { repository.loadMonth(snapshot, current.month, current.timezone, current.region, language) { partial ->
+                    withContext(Dispatchers.Default) { repository.loadMonth(snapshot, current.month, current.timezone, current.region, language, retryTitles = retryTitles) { partial ->
                       withContext(Dispatchers.Main.immediate) {
                         if (sequence == requestId && profileManager.getProfileIdSync() == profileId) {
                             // Cached source snapshots need the same failure/removal reconciliation
@@ -285,7 +302,8 @@ class ReleaseCalendarViewModel @Inject constructor(
                       }
                     } }.also { completed -> latestProgress = CalendarLoadProgress(snapshot, completed, true, completed.completedTitles) }
                 } else {
-                    withContext(Dispatchers.Default) { repository.loadCalendar(profileId, current.month, current.timezone, current.region, language, forceRefresh) { progress ->
+                    withContext(Dispatchers.Default) { repository.loadCalendar(profileId, current.month, current.timezone, current.region, language, forceRefresh,
+                        retryTitles = retryTitles, reuseWatchlists = reusableSources) { progress ->
                       withContext(Dispatchers.Main.immediate) {
                         if (sequence == requestId && profileManager.getProfileIdSync() == profileId) {
                             latestProgress = progress
@@ -305,7 +323,8 @@ class ReleaseCalendarViewModel @Inject constructor(
                 }
                 if (sequence != requestId || profileManager.getProfileIdSync() != profileId) return@launch
                 val finalEntries = latestProgress?.let { mergeCalendarPreview(preview?.entries.orEmpty(), it) } ?: result.entries
-                _uiState.update { it.copy(entries = finalEntries, warnings = result.warnings, isLoading = false) }
+                latestProgress?.let { lastUiPublish = 0; publishEntries(it) }
+                _uiState.update { it.copy(entries = finalEntries, warnings = result.warnings, failedTitleKeys = result.failedTitles, isLoading = false) }
                 // Successful removals are persisted even if another provider failed. Retained
                 // fallback dates keep the original expiry, so outages cannot preserve them forever.
                 val failedSources = latestProgress?.watchlists?.failedSources.orEmpty().map { it.id }.toSet()

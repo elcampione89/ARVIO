@@ -323,6 +323,10 @@ fun AppNavigation(
             }
             WatchlistScreen(
                 calendarViewModel = calendarViewModel,
+                onCalendarOpenRelease = { release ->
+                    navController.navigate(Screen.Details.createRoute(release.media.mediaType, release.media.id,
+                        release.seasonNumber, release.episodeNumber))
+                },
                 currentProfile = currentProfile,
                 onNavigateToDetails = { mediaType, mediaId ->
                     navController.navigate(Screen.Details.createRoute(mediaType, mediaId))

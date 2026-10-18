@@ -55,7 +55,7 @@ function harness(options = {}) {
       if (options.watched) return options.watched(type, feature);
       return type === 'movies' ? [watchedMovie] : [watchedShow];
     } };
-  const tracker = { setProfile() {}, isConnected: true, hiddenProgressShowIds: async () => new Set(), continueWatchingActivity: options.activity ?? (async () => null) };
+  const tracker = { setProfile() {}, restoreSession: async () => {}, isConnected: true, hiddenProgressShowIds: async () => new Set(), continueWatchingActivity: options.activity ?? (async () => null) };
   const noop = () => {};
   const globals = {
     episodeAvailabilityKey: availability.episodeAvailabilityKey,

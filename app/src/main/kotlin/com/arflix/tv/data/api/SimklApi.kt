@@ -33,7 +33,8 @@ interface SimklApi {
     suspend fun scrobbleStart(
         @Header("Authorization") auth: String,
         @Header("simkl-api-key") clientId: String,
-        @Body body: SimklScrobbleBody
+        @Body body: SimklScrobbleBody,
+        @Query("min_progress") minProgress: Int = com.arflix.tv.util.Constants.WATCHED_THRESHOLD
     ): Response<SimklScrobbleResponse>
 
     @POST("scrobble/pause")
@@ -47,7 +48,8 @@ interface SimklApi {
     suspend fun scrobbleStop(
         @Header("Authorization") auth: String,
         @Header("simkl-api-key") clientId: String,
-        @Body body: SimklScrobbleBody
+        @Body body: SimklScrobbleBody,
+        @Query("min_progress") minProgress: Int = com.arflix.tv.util.Constants.WATCHED_THRESHOLD
     ): Response<SimklScrobbleResponse>
 
     // ========== Sync & Watch History ==========
