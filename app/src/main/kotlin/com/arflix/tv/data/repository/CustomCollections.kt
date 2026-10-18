@@ -47,7 +47,10 @@ internal object CustomCollections {
     /**
      * Parses a document without changing profile settings or built-in defaults.
      */
-    fun parse(json: String, url: String?): Result<List<CustomCollectionRail>> = runCatching {
+    /** The pack id [parse] gives a document imported from [url]. */
+    fun packIdForUrl(url: String): String = PACK_ID_PREFIX + sha256Short(url.trim())
+
+    fun parse(json: String, url: String?, fallbackName: String? = null): Result<List<CustomCollectionRail>> = runCatching {
         require(json.length <= 2_000_000) { "Collections document is too large" }
         val root = JsonParser.parseString(json)
         val collections = collectionObjects(root)
@@ -55,6 +58,7 @@ internal object CustomCollections {
         val packId = PACK_ID_PREFIX + sha256Short(url?.trim() ?: json)
         val name = (root as? JsonObject)?.str("name")
             ?: collections.singleOrNull()?.str("title")
+            ?: fallbackName?.takeIf { it.isNotBlank() }
             ?: url?.let { runCatching { java.net.URI(it).host }.getOrNull() }
             ?: "Imported collections"
         val rails = parseRails(collections, packId, name).filter { it.entries.isNotEmpty() }

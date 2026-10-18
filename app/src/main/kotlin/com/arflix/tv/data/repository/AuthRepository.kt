@@ -61,7 +61,9 @@ class AuthRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val cockpitArvioApi: com.arflix.tv.data.api.CockpitArvioApi,
     private val streamRepositoryProvider: Provider<StreamRepository>,
-    private val traktRepositoryProvider: Provider<TraktRepository>
+    private val traktRepositoryProvider: Provider<TraktRepository>,
+    private val catalogRepositoryProvider: Provider<CatalogRepository>,
+    private val profileRepositoryProvider: Provider<ProfileRepository>
 ) {
     private val TAG = "AuthRepository"
 
@@ -73,6 +75,8 @@ class AuthRepository @Inject constructor(
         val DISPLAY_NAME = stringPreferencesKey("display_name")
         val ACCOUNT_SYNC_PAYLOAD = stringPreferencesKey("account_sync_payload")
         val PANEL_ADDONS_REVISION = stringPreferencesKey("panel_addons_revision")
+        /** "<collections revision>|<profile ids>": packs are re-applied when either changes. */
+        val PANEL_COLLECTIONS_STATE = stringPreferencesKey("panel_collections_state")
     }
 
     private val _authState = MutableStateFlow<AuthState>(AuthState.Loading)
@@ -126,6 +130,15 @@ class AuthRepository @Inject constructor(
                 if (revision.isNotBlank() && revision != known) {
                     syncPanelAddons(accessToken)
                 }
+                val meJson = runCatching { JSONObject(me) }.getOrNull()
+                val configRevision = meJson?.optString("config_revision").orEmpty()
+                if (configRevision.isNotBlank() && configRevision != com.arflix.tv.util.PanelKeys.revision) {
+                    syncPanelConfig(accessToken)
+                }
+                val collectionsRevision = meJson?.optString("collections_revision").orEmpty()
+                if (collectionsRevision.isNotBlank()) {
+                    syncPanelCollections(accessToken, collectionsRevision)
+                }
             } catch (e: HttpException) {
                 if (e.code() == 401 || e.code() == 403) {
                     AppLogger.breadcrumb("Auth", "panel_session_rejected code=${e.code()}", severity = "warning")
@@ -174,6 +187,82 @@ class AuthRepository @Inject constructor(
                 signOut(notifyPanel = false)
             }
             AppLogger.breadcrumb("Auth", "panel_addons_failed ${e.javaClass.simpleName}", severity = "warning")
+        }
+    }
+
+    /** Loads the API keys set in the panel; the built-in keys stay in use for any it leaves empty. */
+    private suspend fun syncPanelConfig(accessToken: String) {
+        try {
+            val body = cockpitArvioApi.getConfig("Bearer $accessToken").use { it.string() }
+            com.arflix.tv.util.PanelKeys.apply(body)
+            AppLogger.breadcrumb("Auth", "panel_config_applied")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            AppLogger.breadcrumb("Auth", "panel_config_failed ${e.javaClass.simpleName}", severity = "warning")
+        }
+    }
+
+    private fun panelCollectionsDir(): java.io.File =
+        java.io.File(context.filesDir, "panel_collections").apply { mkdirs() }
+
+    /**
+     * Installs the panel's collection packs in every profile. Each pack version is downloaded
+     * once and kept on the device, so later starts (and new profiles) need no download.
+     * [knownRevision] is the panel's current revision from me.php; null forces a check.
+     */
+    private suspend fun syncPanelCollections(accessToken: String, knownRevision: String? = null) {
+        try {
+            val profileIds = runCatching { profileRepositoryProvider.get().getProfiles().map { it.id } }
+                .getOrDefault(emptyList()).sorted()
+            val stored = context.authDataStore.data.first()[PrefsKeys.PANEL_COLLECTIONS_STATE].orEmpty()
+            if (knownRevision != null && stored == "$knownRevision|${profileIds.joinToString(",")}") return
+
+            val root = JSONObject(cockpitArvioApi.getCollections("Bearer $accessToken").use { it.string() })
+            val revision = root.optString("revision")
+            val list = root.optJSONArray("collections")
+            val dir = panelCollectionsDir()
+            var complete = true
+            val packs = mutableListOf<PanelCollectionPack>()
+            val keep = mutableSetOf<String>()
+            if (list != null) {
+                for (i in 0 until list.length()) {
+                    val o = list.optJSONObject(i) ?: continue
+                    val id = o.optInt("id")
+                    val key = o.optString("key").replace(Regex("[^A-Za-z0-9_-]"), "")
+                    if (id <= 0 || key.isBlank()) continue
+                    val file = java.io.File(dir, "$key.json")
+                    val json = if (file.isFile) {
+                        file.readText()
+                    } else {
+                        runCatching {
+                            cockpitArvioApi.getCollection("Bearer $accessToken", id).use { it.string() }
+                        }.onFailure {
+                            if (it is kotlinx.coroutines.CancellationException) throw it
+                            complete = false
+                        }.getOrNull()?.also { file.writeText(it) }
+                    } ?: continue
+                    keep += file.name
+                    packs += PanelCollectionPack(id, o.optString("name").takeIf { !o.isNull("name") && it.isNotBlank() }, json)
+                }
+            }
+            val removedJson = root.optJSONArray("removed_ids")
+            val removed = buildList {
+                if (removedJson != null) for (i in 0 until removedJson.length()) add(removedJson.optInt(i))
+            }.filter { it > 0 }
+            val changed = catalogRepositoryProvider.get().applyPanelCollections(profileIds, packs, removed)
+            dir.listFiles()?.filter { it.name !in keep }?.forEach { it.delete() }
+            if (complete) {
+                context.authDataStore.edit {
+                    it[PrefsKeys.PANEL_COLLECTIONS_STATE] = "$revision|${profileIds.joinToString(",")}"
+                }
+            }
+            AppLogger.breadcrumb("Auth", "panel_collections_applied packs=${packs.size} profilesChanged=$changed complete=$complete")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is HttpException && (e.code() == 401 || e.code() == 403)) {
+                signOut(notifyPanel = false)
+            }
+            AppLogger.breadcrumb("Auth", "panel_collections_failed ${e.javaClass.simpleName}", severity = "warning")
         }
     }
 
@@ -247,7 +336,11 @@ class AuthRepository @Inject constructor(
 
             AppLogger.breadcrumb("Auth", "panel_sign_in_success")
             // Install this line's panel addons in the background; sign-in does not wait for it.
-            panelScope.launch { syncPanelAddons(tokens.accessToken) }
+            panelScope.launch {
+                syncPanelConfig(tokens.accessToken)
+                syncPanelAddons(tokens.accessToken)
+                syncPanelCollections(tokens.accessToken)
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             val message = panelErrorMessage(e, "Sign in failed")

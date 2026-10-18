@@ -60,6 +60,9 @@ import javax.inject.Singleton
  * system language rather than the language selected in the app, so the text is
  * resolved at the @Composable display point (see SettingsScreen).
  */
+/** A collection pack from the panel (Panel > Collections): its id, panel name and collections JSON. */
+data class PanelCollectionPack(val id: Int, val name: String?, val json: String)
+
 class CatalogException(
     @param:StringRes val messageRes: Int,
     val formatArgs: List<Any> = emptyList()
@@ -873,6 +876,43 @@ class CatalogRepository @Inject constructor(
         replaceCatalogsForProfile(targetProfileId, CustomCollections.merge(current, imported))
         return Result.success(rails.first().packName to rails.size)
     }
+
+    /**
+     * Installs the panel's collection packs in every profile, replacing older versions of the
+     * same pack, and removes packs the panel disabled or deleted. Packs come back if a user
+     * removed them: the panel decides which collections every line has.
+     * Returns how many profiles changed.
+     */
+    suspend fun applyPanelCollections(
+        profileIds: List<String>,
+        packs: List<PanelCollectionPack>,
+        removedIds: List<Int>
+    ): Int {
+        val imported = packs.mapNotNull { pack ->
+            CustomCollections.parse(pack.json, panelCollectionUrl(pack.id), pack.name)
+                .onFailure { AppLogger.breadcrumb("Catalogs", "panel_pack_invalid id=${pack.id}", severity = "warning") }
+                .getOrNull()
+                ?.let { CustomCollections.catalogs(it) }
+                ?.takeIf { it.isNotEmpty() }
+        }
+        val dropped = removedIds.map { CustomCollections.packIdForUrl(panelCollectionUrl(it)) }.toSet()
+        var changed = 0
+        for (profileId in (profileIds + activeProfileId()).map { it.trim().ifBlank { "default" } }.distinct()) {
+            val current = getCatalogsForProfile(profileId)
+            var next = current.filterNot { it.packId != null && it.packId in dropped }
+            for (pack in imported) {
+                next = CustomCollections.merge(next, pack)
+            }
+            if (next != current) {
+                replaceCatalogsForProfile(profileId, next)
+                changed++
+            }
+        }
+        return changed
+    }
+
+    /** Stable address per panel pack, so a new version replaces the old one instead of adding a copy. */
+    private fun panelCollectionUrl(id: Int) = "arvio-panel://collections/$id"
 
     private fun builtInCollectionIds(): Set<String> = MediaRepository.buildPreinstalledDefaults()
         .filter { it.kind == CatalogKind.COLLECTION_RAIL || it.kind == CatalogKind.COLLECTION }.map { it.id }.toSet()

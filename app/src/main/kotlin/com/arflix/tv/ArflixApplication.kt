@@ -87,6 +87,8 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
     override fun attachBaseContext(base: android.content.Context) {
         super.attachBaseContext(base)
         OkHttpProvider.init(this)
+        // Panel API keys must be loaded before Hilt creates the repositories that use them.
+        com.arflix.tv.util.PanelKeys.init(this)
     }
 
     override fun onCreate() {

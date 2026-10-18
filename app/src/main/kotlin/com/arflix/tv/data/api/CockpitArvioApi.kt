@@ -34,6 +34,21 @@ interface CockpitArvioApi {
     @GET("addons.php")
     suspend fun getAddons(@Header("Authorization") authorization: String): ResponseBody
 
+    /** Collection packs the panel gives every line, and panel packs to remove. */
+    @GET("collections.php")
+    suspend fun getCollections(@Header("Authorization") authorization: String): ResponseBody
+
+    /** One collection pack's collections JSON, returned verbatim. */
+    @GET("collection.php")
+    suspend fun getCollection(
+        @Header("Authorization") authorization: String,
+        @retrofit2.http.Query("id") id: Int
+    ): ResponseBody
+
+    /** API keys set in the panel (only the filled-in ones). */
+    @GET("config.php")
+    suspend fun getConfig(@Header("Authorization") authorization: String): ResponseBody
+
     /** Frees this device's slot on the panel. */
     @POST("logout.php")
     suspend fun logout(@Header("Authorization") authorization: String): ResponseBody

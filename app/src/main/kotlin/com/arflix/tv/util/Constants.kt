@@ -57,16 +57,22 @@ object Constants {
         } ?: ""
 
     // TMDB direct-call credentials.
-    const val TMDB_API_KEY = "38208ec0916665e6989a1163bb362859"
+    // The panel can replace any of these for every line (Panel > API keys); see PanelKeys.
+    private const val BUILT_IN_TMDB_API_KEY = "38208ec0916665e6989a1163bb362859"
+    val TMDB_API_KEY: String get() = PanelKeys.get("tmdb_api_key") ?: BUILT_IN_TMDB_API_KEY
     const val TMDB_READ_ACCESS_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIzODIwOGVjMDkxNjY2NWU2OTg5YTExNjNiYjM2Mjg1OSIsIm5iZiI6MTU4OTE0ODMzNC45OTcsInN1YiI6IjVlYjg3YWFlYzM1MTRjMDAxZTVhN2Q5ZCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.Xq8vQPnachkv69Tf2Q2up5G0Eo89RvLDEYZ-eJBsR3Q"
 
     // Optional local direct-call credentials.
-    val TRAKT_CLIENT_ID: String get() = usableSecret(BuildConfig.TRAKT_CLIENT_ID)
+    val TRAKT_CLIENT_ID: String
+        get() = PanelKeys.get("trakt_client_id") ?: usableSecret(BuildConfig.TRAKT_CLIENT_ID)
     val TRAKT_CLIENT_SECRET: String
-        get() = usableSecret(BuildConfig.TRAKT_CLIENT_SECRET)
-    val SIMKL_CLIENT_ID: String get() = usableSecret(BuildConfig.SIMKL_CLIENT_ID)
-    val SIMKL_V2_CLIENT_ID: String get() = usableSecret(BuildConfig.SIMKL_V2_CLIENT_ID)
-    val MDBLIST_CLIENT_ID: String get() = usableSecret(BuildConfig.MDBLIST_CLIENT_ID)
+        get() = PanelKeys.get("trakt_client_secret") ?: usableSecret(BuildConfig.TRAKT_CLIENT_SECRET)
+    val SIMKL_CLIENT_ID: String
+        get() = PanelKeys.get("simkl_client_id") ?: usableSecret(BuildConfig.SIMKL_CLIENT_ID)
+    val SIMKL_V2_CLIENT_ID: String
+        get() = PanelKeys.get("simkl_v2_client_id") ?: usableSecret(BuildConfig.SIMKL_V2_CLIENT_ID)
+    val MDBLIST_CLIENT_ID: String
+        get() = PanelKeys.get("mdblist_client_id") ?: usableSecret(BuildConfig.MDBLIST_CLIENT_ID)
 
     // Image URLs - tuned for TV quality with smooth scrolling/perf.
     const val IMAGE_BASE = "https://image.tmdb.org/t/p/w780"

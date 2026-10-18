@@ -92,8 +92,8 @@ class TraktRepository @Inject constructor(
 
     // User ID key for Supabase sync (shared across profiles)
     private val USER_ID_KEY = stringPreferencesKey("user_id")
-    private val clientId = Constants.TRAKT_CLIENT_ID
-    private val clientSecret = Constants.TRAKT_CLIENT_SECRET
+    private val clientId: String get() = Constants.TRAKT_CLIENT_ID
+    private val clientSecret: String get() = Constants.TRAKT_CLIENT_SECRET
     private val PERSONAL_LIST_PAGE_SIZE = 100
     // Profile-scoped preference keys - each profile has its own Trakt connection
     private fun accessTokenKey() = profileManager.profileStringKey("trakt_access_token")

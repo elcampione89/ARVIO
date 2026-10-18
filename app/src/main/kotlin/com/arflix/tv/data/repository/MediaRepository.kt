@@ -123,7 +123,7 @@ class MediaRepository @Inject constructor(
         val totalCount: Int? = null
     )
 
-    private val apiKey = Constants.TMDB_API_KEY
+    private val apiKey: String get() = Constants.TMDB_API_KEY
     private val gson = Gson()
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     // Lazy so constructing the repository (tests do, with mocks) doesn't touch disk.
