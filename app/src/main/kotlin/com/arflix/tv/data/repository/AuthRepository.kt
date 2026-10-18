@@ -87,6 +87,20 @@ class AuthRepository @Inject constructor(
     private val gson = Gson()
     private val panelScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    init {
+        // The VPN asks the panel for this device's WireGuard config with the current sign-in.
+        com.arflix.tv.vpn.VpnController.configProvider = { serverId ->
+            val token = context.authDataStore.data.first()[PrefsKeys.ACCESS_TOKEN]
+            if (token.isNullOrBlank()) throw IllegalStateException("Sign in again to use the VPN.")
+            try {
+                val body = cockpitArvioApi.getVpnConfig("Bearer $token", serverId).use { it.string() }
+                JSONObject(body).getString("config")
+            } catch (e: HttpException) {
+                throw IllegalStateException(panelErrorMessage(e, "The VPN server is not available right now."))
+            }
+        }
+    }
+
     /** Stable per-install id so signing in again on this device reuses its slot on the panel. */
     private fun deviceId(): String = runCatching {
         android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)

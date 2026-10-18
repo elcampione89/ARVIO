@@ -36,10 +36,11 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!-- The WireGuard library needs Android 7; the VPN switch says so on Android 6. -->
+    <uses-sdk tools:overrideLibrary="com.wireguard.android.tunnel" />
+
     <queries>
         <package android:name="com.discord" />
-        <!-- OpenVPN for Android: the VPN switch in Settings drives it. -->
-        <package android:name="de.blinkt.openvpn" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="discord" />

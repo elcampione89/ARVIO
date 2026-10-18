@@ -49,9 +49,16 @@ interface CockpitArvioApi {
     @GET("keys.php")
     suspend fun getConfig(@Header("Authorization") authorization: String): ResponseBody
 
-    /** VPN servers (configs and logins) when the panel offers the VPN. */
+    /** VPN servers (WireGuard via wg-easy) when the panel offers the VPN. */
     @GET("vpn.php")
     suspend fun getVpn(@Header("Authorization") authorization: String): ResponseBody
+
+    /** This device's WireGuard config for a VPN server; the panel creates it on first use. */
+    @GET("vpnconfig.php")
+    suspend fun getVpnConfig(
+        @Header("Authorization") authorization: String,
+        @retrofit2.http.Query("server") serverId: Int
+    ): ResponseBody
 
     /** Frees this device's slot on the panel. */
     @POST("logout.php")

@@ -469,6 +469,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Carries on connecting the VPN after Android's "allow VPN connection" screen.
+        com.arflix.tv.vpn.VpnController.onAppResumed(this)
         // Signalled from here, not from a screen: the app can return to the
         // foreground on any destination — a TV woken in the morning resumes onto
         // whatever was left on display — and a Home-scoped observer would never

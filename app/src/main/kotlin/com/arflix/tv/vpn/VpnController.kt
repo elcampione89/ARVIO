@@ -1,55 +1,47 @@
 package com.arflix.tv.vpn
 
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
 import android.content.SharedPreferences
-import android.content.pm.PackageManager
+import android.net.VpnService
 import android.os.Build
-import android.os.IBinder
-import com.arflix.tv.network.OkHttpProvider
-import com.arflix.tv.updater.ApkInstaller
 import com.arflix.tv.util.AppLogger
-import kotlinx.coroutines.CompletableDeferred
+import com.wireguard.android.backend.GoBackend
+import com.wireguard.android.backend.Tunnel
+import com.wireguard.config.Config
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.File
+import java.io.StringReader
 import java.net.ConnectException
 import java.net.InetSocketAddress
 import java.net.Socket
 
 /**
- * One-tap VPN for panel users (Panel > VPN). The panel sends its OpenVPN servers with their
- * logins; this connects to the fastest one (or the one the user picked) through the free
- * "OpenVPN for Android" app, installing it first if the device doesn't have it.
+ * One-press VPN built into the app (Panel > VPN). WireGuard runs inside ARVIO through the
+ * WireGuard tunnel library, so nothing else needs installing. The panel creates this device's
+ * WireGuard client on the admin's wg-easy server and hands the config over; users never see it.
  *
- * Users never see a config or password: the config is handed to OpenVPN for Android inline.
+ * The only prompt is Android's own one-time "allow VPN connection" screen; after the user
+ * answers it the connection continues by itself (see [onAppResumed]).
  */
 object VpnController {
 
     enum class Phase { OFF, NEEDS_SETUP, WORKING, CONNECTING, CONNECTED, FAILED }
 
-    data class Server(
-        val id: Int,
-        val country: String,
-        val label: String,
-        val config: String,
-        val username: String,
-        val password: String
-    )
+    data class Server(val id: Int, val label: String, val country: String, val host: String, val port: Int)
 
     data class State(
         /** The panel switched the VPN on and has at least one server. */
@@ -60,7 +52,7 @@ object VpnController {
         val phase: Phase = Phase.OFF,
         /** The server in use or being connected to. */
         val serverLabel: String? = null,
-        /** What the user needs to know or do next, if anything. */
+        /** What the user needs to know, if anything. */
         val message: String? = null
     ) {
         val isOn: Boolean get() = phase == Phase.CONNECTED || phase == Phase.CONNECTING
@@ -71,6 +63,13 @@ object VpnController {
     const val AUTO = "auto"
     private const val PREFS = "panel_vpn"
     private const val FILE = "panel_vpn.json"
+    private const val CONFIG_DIR = "panel_wg"
+
+    /**
+     * Fetches this device's WireGuard config for a server from the panel. Set by AuthRepository,
+     * which holds the sign-in; throws with a message the user can read when the panel refuses.
+     */
+    @Volatile var configProvider: (suspend (serverId: Int) -> String)? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow(State())
@@ -78,10 +77,19 @@ object VpnController {
 
     @Volatile private var appContext: Context? = null
     @Volatile private var prefs: SharedPreferences? = null
-    @Volatile private var openVpnApkUrl: String = ""
-    @Volatile private var remote: OpenVpnRemote? = null
-    @Volatile private var connection: ServiceConnection? = null
-    private val statusCallback = OpenVpnRemote.StatusCallback { state, message, level -> onStatus(state, message, level) }
+    @Volatile private var arvioOnly: Boolean = true
+    @Volatile private var pendingConnect = false
+    @Volatile private var backend: GoBackend? = null
+
+    private val tunnel = object : Tunnel {
+        override fun getName(): String = "arvio"
+
+        override fun onStateChange(newState: Tunnel.State) {
+            if (newState == Tunnel.State.DOWN) {
+                _state.update { if (it.phase == Phase.CONNECTED) it.copy(phase = Phase.OFF, message = null) else it }
+            }
+        }
+    }
 
     /** Call once at start-up. Loads the last servers the panel sent. */
     fun init(context: Context) {
@@ -92,10 +100,6 @@ object VpnController {
         val cached = runCatching { File(app.filesDir, FILE).takeIf { it.isFile }?.readText() }.getOrNull()
         if (cached != null) runCatching { load(cached) }
         _state.update { it.copy(selected = p.getString("selected", AUTO) ?: AUTO) }
-        if (_state.value.offered && isOpenVpnInstalled(app)) {
-            // Show the real status if OpenVPN for Android is already connected.
-            scope.launch { runCatching { bind(app) } }
-        }
     }
 
     val revision: String get() = prefs?.getString("revision", null).orEmpty()
@@ -106,6 +110,9 @@ object VpnController {
         load(json)
         File(ctx.filesDir, FILE).writeText(json)
         prefs?.edit()?.putString("revision", JSONObject(json).optString("revision"))?.apply()
+        // Forget cached configs of servers the panel no longer offers.
+        val keep = _state.value.servers.map { "${it.id}.conf" }.toSet()
+        File(ctx.filesDir, CONFIG_DIR).listFiles()?.filter { it.name !in keep }?.forEach { it.delete() }
     }
 
     private fun load(json: String) {
@@ -113,29 +120,30 @@ object VpnController {
         val list = root.optJSONArray("servers") ?: JSONArray()
         val servers = (0 until list.length()).mapNotNull { i ->
             val o = list.optJSONObject(i) ?: return@mapNotNull null
-            val config = o.optString("config")
-            if (config.isBlank()) return@mapNotNull null
             Server(
                 id = o.optInt("id"),
+                label = o.optString("label").ifBlank { "VPN" },
                 country = o.optString("country"),
-                label = o.optString("label").ifBlank { o.optString("country") },
-                config = config,
-                username = o.optString("username"),
-                password = o.optString("password")
-            )
+                host = o.optString("host"),
+                port = o.optInt("port", 443)
+            ).takeIf { it.id > 0 }
         }
-        openVpnApkUrl = root.optString("openvpn_apk_url")
+        arvioOnly = root.optBoolean("arvio_only", true)
         _state.update { s ->
             val selected = if (s.selected == AUTO || servers.any { it.id.toString() == s.selected }) s.selected else AUTO
             s.copy(offered = root.optBoolean("enabled") && servers.isNotEmpty(), servers = servers, selected = selected)
         }
     }
 
-    /** Signed out: forget the servers and drop the connection. */
+    /** Signed out: drop the connection and forget the servers and this device's configs. */
     fun clear() {
-        runCatching { remote?.disconnect() }
-        appContext?.let { runCatching { File(it.filesDir, FILE).delete() } }
+        runCatching { backend?.setState(tunnel, Tunnel.State.DOWN, null) }
+        appContext?.let { ctx ->
+            runCatching { File(ctx.filesDir, FILE).delete() }
+            runCatching { File(ctx.filesDir, CONFIG_DIR).deleteRecursively() }
+        }
         prefs?.edit()?.remove("revision")?.apply()
+        pendingConnect = false
         _state.value = State(selected = _state.value.selected)
     }
 
@@ -154,7 +162,7 @@ object VpnController {
         if (s.phase == Phase.WORKING) return
         scope.launch {
             try {
-                if (s.isOn) disconnect() else connect(context.applicationContext)
+                if (s.isOn) disconnect() else connect(context)
             } catch (e: Exception) {
                 AppLogger.breadcrumb("Vpn", "toggle_failed ${e.javaClass.simpleName}", severity = "warning")
                 _state.update { it.copy(phase = Phase.FAILED, message = friendlyError(e)) }
@@ -162,79 +170,91 @@ object VpnController {
         }
     }
 
+    /** Called when ARVIO comes back to the front: carries on after Android's VPN permission screen. */
+    fun onAppResumed(context: Context) {
+        if (!pendingConnect) return
+        pendingConnect = false
+        if (runCatching { VpnService.prepare(context) }.getOrNull() == null) {
+            toggle(context)
+        } else {
+            _state.update { it.copy(phase = Phase.FAILED, message = "The VPN needs your permission. Press VPN and choose OK.") }
+        }
+    }
+
     private suspend fun connect(context: Context) {
+        val app = context.applicationContext ?: context
         val servers = _state.value.servers
         if (servers.isEmpty()) {
             _state.update { it.copy(phase = Phase.FAILED, message = "No VPN servers are set up yet.") }
             return
         }
-        if (!isOpenVpnInstalled(context)) {
-            installOpenVpn(context)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            _state.update { it.copy(phase = Phase.FAILED, message = "The VPN needs Android 7 or newer.") }
             return
         }
-        _state.update { it.copy(phase = Phase.WORKING, message = "Starting…") }
-        val api = bind(context) ?: run {
-            _state.update { it.copy(phase = Phase.FAILED, message = "Couldn't start OpenVPN for Android. Open it once, then try again.") }
+        // Android's one-time "allow VPN connection" screen; we continue when the app resumes.
+        VpnService.prepare(app)?.let { intent ->
+            pendingConnect = true
+            _state.update { it.copy(phase = Phase.NEEDS_SETUP, message = "Choose OK to allow the VPN.") }
+            runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                .onFailure { pendingConnect = false; throw it }
             return
         }
-        // First use: OpenVPN for Android asks whether ARVIO may control it, then Android asks
-        // to allow a VPN. Each is a one-time screen; the user presses VPN again afterwards.
-        api.prepare(context.packageName)?.let { intent ->
-            startIntent(context, intent)
-            _state.update { it.copy(phase = Phase.NEEDS_SETUP, message = "Choose OK to let ARVIO use OpenVPN, then press VPN again.") }
-            return
-        }
-        api.prepareVpnService()?.let { intent ->
-            startIntent(context, intent)
-            _state.update { it.copy(phase = Phase.NEEDS_SETUP, message = "Allow the VPN connection, then press VPN again.") }
-            return
-        }
+        _state.update { it.copy(phase = Phase.WORKING, message = "Finding the best server…") }
         val selected = _state.value.selected
         val server = servers.firstOrNull { it.id.toString() == selected } ?: fastest(servers)
         _state.update { it.copy(phase = Phase.CONNECTING, serverLabel = server.label, message = "Connecting to ${server.label}…") }
-        api.startVpn(inlineConfig(server))
-        AppLogger.breadcrumb("Vpn", "start server=${server.id}")
+
+        val goBackend = backend ?: GoBackend(app).also { backend = it }
+        val cacheFile = File(File(app.filesDir, CONFIG_DIR).apply { mkdirs() }, "${server.id}.conf")
+        val cached = cacheFile.takeIf { it.isFile }?.readText()
+        try {
+            goBackend.setState(tunnel, Tunnel.State.UP, buildConfig(cached ?: fetchConfig(server, cacheFile), app))
+        } catch (e: Exception) {
+            if (cached == null) throw e
+            // The saved config may be stale (e.g. the panel recreated this device's client): get it again.
+            cacheFile.delete()
+            goBackend.setState(tunnel, Tunnel.State.UP, buildConfig(fetchConfig(server, cacheFile), app))
+        }
+        _state.update { it.copy(phase = Phase.CONNECTED, message = null) }
+        AppLogger.breadcrumb("Vpn", "up server=${server.id}")
+    }
+
+    private suspend fun fetchConfig(server: Server, cacheFile: File): String {
+        val provider = configProvider ?: error("Sign in again to use the VPN.")
+        return provider(server.id).also { cacheFile.writeText(it) }
+    }
+
+    /** Parses the config; when the panel asks for it, only ARVIO's own traffic uses the tunnel. */
+    private fun buildConfig(text: String, context: Context): Config {
+        val hasAppRules = Regex("(?im)^\\s*(Included|Excluded)Applications\\s*=").containsMatchIn(text)
+        val withApps = if (arvioOnly && !hasAppRules) {
+            text.replaceFirst(Regex("(?im)^\\s*\\[Interface]\\s*$"), "[Interface]\nIncludedApplications = ${context.packageName}")
+        } else {
+            text
+        }
+        return Config.parse(BufferedReader(StringReader(withApps)))
     }
 
     private fun disconnect() {
-        remote?.disconnect()
+        backend?.setState(tunnel, Tunnel.State.DOWN, null)
         _state.update { it.copy(phase = Phase.OFF, message = null) }
     }
 
-    /** The config with the panel's login inlined, so OpenVPN never asks the user for it. */
-    private fun inlineConfig(server: Server): String {
-        val withoutAuth = server.config
-            .replace(Regex("<auth-user-pass>[\\s\\S]*?</auth-user-pass>\\s*"), "")
-            .lines()
-            .filterNot { it.trim().startsWith("auth-user-pass") && !it.trim().startsWith("auth-user-pass-verify") }
-            .joinToString("\n")
-            .trimEnd()
-        if (server.username.isBlank()) return withoutAuth + "\n"
-        return withoutAuth + "\n<auth-user-pass>\n" + server.username + "\n" + server.password + "\n</auth-user-pass>\n"
-    }
-
-    /**
-     * Picks the server that answers fastest. A TCP connection attempt to the server's port gets an
-     * answer (accept or refuse) after one round trip, which works for UDP servers too.
-     */
+    /** Picks the server that answers fastest (time for a TCP connection to its wg-easy address). */
     private suspend fun fastest(servers: List<Server>): Server {
         if (servers.size == 1) return servers.first()
-        val timed = kotlinx.coroutines.coroutineScope {
+        val timed = coroutineScope {
             servers.map { server -> async(Dispatchers.IO) { server to roundTripMs(server) } }.awaitAll()
         }
-        AppLogger.breadcrumb("Vpn", "latency " + timed.joinToString { "${it.first.id}=${it.second}" })
         return timed.minByOrNull { it.second }?.takeIf { it.second < Long.MAX_VALUE }?.first ?: servers.first()
     }
 
     private fun roundTripMs(server: Server): Long {
-        val remote = Regex("(?m)^\\s*remote\\s+(\\S+)(?:\\s+(\\d+))?").find(server.config) ?: return Long.MAX_VALUE
-        val host = remote.groupValues[1]
-        val port = remote.groupValues[2].toIntOrNull()
-            ?: Regex("(?m)^\\s*port\\s+(\\d+)").find(server.config)?.groupValues?.get(1)?.toIntOrNull()
-            ?: 1194
+        if (server.host.isBlank()) return Long.MAX_VALUE
         val start = System.nanoTime()
         return try {
-            Socket().use { it.connect(InetSocketAddress(host, port), 1500) }
+            Socket().use { it.connect(InetSocketAddress(server.host, server.port), 1500) }
             (System.nanoTime() - start) / 1_000_000
         } catch (_: ConnectException) {
             // Refused still means the server answered.
@@ -244,90 +264,25 @@ object VpnController {
         }
     }
 
-    private fun onStatus(state: String, message: String, level: String) {
-        _state.update { s ->
-            when (level) {
-                "LEVEL_CONNECTED" -> s.copy(phase = Phase.CONNECTED, message = null)
-                "LEVEL_START", "LEVEL_CONNECTING_SERVER_REPLIED", "LEVEL_CONNECTING_NO_SERVER_REPLY_YET" ->
-                    if (s.phase == Phase.OFF && state == "NOPROCESS") s else s.copy(phase = Phase.CONNECTING)
-                "LEVEL_AUTH_FAILED" -> s.copy(phase = Phase.FAILED, message = "The VPN server rejected the login. Please contact your provider.")
-                "LEVEL_NONETWORK" -> if (s.isOn) s.copy(phase = Phase.CONNECTING, message = "Waiting for a network connection…") else s
-                "LEVEL_NOTCONNECTED", "LEVEL_VPNPAUSED" ->
-                    if (s.phase == Phase.FAILED || s.phase == Phase.NEEDS_SETUP) s else s.copy(phase = Phase.OFF, message = null)
-                else -> s
+    private fun friendlyError(e: Exception): String {
+        val text = e.message.orEmpty()
+        if (e is com.wireguard.android.backend.BackendException) {
+            return when (e.reason) {
+                com.wireguard.android.backend.BackendException.Reason.VPN_NOT_AUTHORIZED ->
+                    "The VPN needs your permission. Press VPN and choose OK."
+                com.wireguard.android.backend.BackendException.Reason.DNS_RESOLUTION_FAILURE ->
+                    "Couldn't find the VPN server. Check the internet connection and try again."
+                else -> "The VPN couldn't start (${e.reason.name.lowercase().replace('_', ' ')}). Please try again."
             }
         }
-    }
-
-    private suspend fun bind(context: Context): OpenVpnRemote? {
-        remote?.let { return it }
-        val ready = CompletableDeferred<OpenVpnRemote?>()
-        val conn = object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                val api = service?.let { OpenVpnRemote(it) }
-                remote = api
-                // Registering fails until the user allowed ARVIO; the status then arrives after connect.
-                api?.let { runCatching { it.registerStatusCallback(statusCallback) } }
-                ready.complete(api)
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {
-                remote = null
-            }
+        if (e is com.wireguard.config.BadConfigException) {
+            return "The VPN server sent a config the app can't read. Please contact your provider."
         }
-        val intent = Intent(OpenVpnRemote.SERVICE_ACTION).setPackage(OpenVpnRemote.PACKAGE)
-        val bound = runCatching { context.bindService(intent, conn, Context.BIND_AUTO_CREATE) }.getOrDefault(false)
-        if (!bound) return null
-        connection = conn
-        val api = withTimeoutOrNull(8_000) { ready.await() }
-        api?.let { runCatching { it.registerStatusCallback(statusCallback) } }
-        return api
-    }
-
-    fun isOpenVpnInstalled(context: Context): Boolean = runCatching {
-        if (Build.VERSION.SDK_INT >= 33) {
-            context.packageManager.getPackageInfo(OpenVpnRemote.PACKAGE, PackageManager.PackageInfoFlags.of(0))
-        } else {
-            @Suppress("DEPRECATION")
-            context.packageManager.getPackageInfo(OpenVpnRemote.PACKAGE, 0)
+        return when {
+            e is java.io.IOException -> "Couldn't reach the VPN. Check the internet connection and try again."
+            text.contains("VPN_NOT_AUTHORIZED", ignoreCase = true) -> "The VPN needs your permission. Press VPN and choose OK."
+            text.isNotBlank() && !text.contains("Exception") -> text
+            else -> "The VPN couldn't start. Please try again or pick another location."
         }
-        true
-    }.getOrDefault(false)
-
-    /** Downloads and installs OpenVPN for Android (the link comes from the panel). */
-    private fun installOpenVpn(context: Context) {
-        if (!ApkInstaller.canRequestPackageInstalls(context)) {
-            ApkInstaller.buildUnknownSourcesSettingsIntent(context)?.let { startIntent(context, it) }
-            _state.update {
-                it.copy(phase = Phase.NEEDS_SETUP, message = "Allow ARVIO to install apps, then press VPN again to install OpenVPN for Android.")
-            }
-            return
-        }
-        val url = openVpnApkUrl.ifBlank {
-            _state.update { it.copy(phase = Phase.FAILED, message = "Install the OpenVPN for Android app, then press VPN again.") }
-            return
-        }
-        _state.update { it.copy(phase = Phase.WORKING, message = "Downloading OpenVPN for Android…") }
-        val file = File(context.cacheDir, "openvpn-for-android.apk")
-        OkHttpProvider.client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-            if (!response.isSuccessful) error("download failed (${response.code})")
-            val body = response.body ?: error("empty download")
-            file.outputStream().use { out -> body.byteStream().use { it.copyTo(out) } }
-        }
-        ApkInstaller.launchInstall(context, file)
-        _state.update {
-            it.copy(phase = Phase.NEEDS_SETUP, message = "Install OpenVPN for Android, then press VPN again.")
-        }
-    }
-
-    private fun startIntent(context: Context, intent: Intent) {
-        runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            .onFailure { AppLogger.breadcrumb("Vpn", "launch_failed ${it.javaClass.simpleName}", severity = "warning") }
-    }
-
-    private fun friendlyError(e: Exception): String = when (e) {
-        is java.io.IOException -> "Couldn't reach the internet. Check the connection and try again."
-        is SecurityException -> "OpenVPN for Android didn't allow ARVIO. Press VPN again and choose OK."
-        else -> e.message?.takeIf { it.isNotBlank() }?.let { "VPN error: $it" } ?: "The VPN couldn't start. Please try again."
     }
 }

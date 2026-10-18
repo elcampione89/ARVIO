@@ -263,3 +263,8 @@
 # sherpa-onnx (audio subtitle sync speech recognition): JNI reads config fields by name.
 -keep class com.k2fsa.sherpa.onnx.** { *; }
 -keep interface com.k2fsa.sherpa.onnx.** { *; }
+
+# WireGuard tunnel (built-in VPN): JNI and the VpnService are reached by name.
+-keep class com.wireguard.android.backend.** { *; }
+-keep class com.wireguard.config.** { *; }
+-keep class com.wireguard.crypto.** { *; }
