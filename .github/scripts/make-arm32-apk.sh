@@ -25,8 +25,9 @@ cp "$in" "$work/strip.apk"
 # Drop the 64-bit (and any x86) libraries and the old signature.
 zip -q -d "$work/strip.apk" 'lib/arm64-v8a/*' 'lib/x86/*' 'lib/x86_64/*' \
   'META-INF/*.SF' 'META-INF/*.RSA' 'META-INF/*.EC' 'META-INF/*.DSA' 'META-INF/MANIFEST.MF' >/dev/null 2>&1 || true
-unzip -l "$work/strip.apk" | grep -q 'lib/armeabi-v7a/' || { echo "No armeabi-v7a libraries in $in" >&2; exit 1; }
-if unzip -l "$work/strip.apk" | grep -q 'lib/arm64-v8a/'; then echo "64-bit libraries still present" >&2; exit 1; fi
+unzip -l "$work/strip.apk" > "$work/list.txt"
+grep -q 'lib/armeabi-v7a/' "$work/list.txt" || { echo "::error::No armeabi-v7a libraries in $in"; exit 1; }
+if grep -q 'lib/arm64-v8a/' "$work/list.txt"; then echo "::error::64-bit libraries still present"; exit 1; fi
 
 # Native libraries are stored uncompressed, so they must be page-aligned before signing.
 "$bt/zipalign" -f -p 4 "$work/strip.apk" "$work/aligned.apk"
@@ -68,9 +69,10 @@ if ! log="$("$bt/apksigner" sign \
 fi
 
 # Must carry exactly the same certificate as the universal APK, or it won't update existing installs.
-cert() { "$bt/apksigner" verify --print-certs "$1" | grep -m1 'certificate SHA-256 digest' ; }
-"$bt/apksigner" verify "$out"
-[ "$(cert "$in")" = "$(cert "$out")" ] || { echo "Signing certificate mismatch" >&2; exit 1; }
-"$bt/zipalign" -c -p 4 "$out"
+cert() { "$bt/apksigner" verify --print-certs "$1" > "$work/certs.txt" 2>&1 || true; grep 'certificate SHA-256 digest' "$work/certs.txt" | head -n 1 | sed 's/.*digest: //'; }
+c_in="$(cert "$in")"; c_out="$(cert "$out")"
+echo "::notice::Universal APK certificate: ${c_in:-none}  Firestick APK certificate: ${c_out:-none}"
+[ -n "$c_out" ] && [ "$c_in" = "$c_out" ] || { echo "::error::Signing certificate mismatch"; head -n 5 "$work/certs.txt" | sed 's/^/::error::/'; exit 1; }
+"$bt/zipalign" -c -p 4 "$out" > /dev/null || { echo "::error::zipalign check failed"; exit 1; }
 echo "Made $out ($(du -h "$out" | cut -f1)), from $(du -h "$in" | cut -f1)"
 rm -rf "$work"
