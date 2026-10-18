@@ -49,6 +49,10 @@ interface CockpitArvioApi {
     @GET("keys.php")
     suspend fun getConfig(@Header("Authorization") authorization: String): ResponseBody
 
+    /** VPN servers (configs and logins) when the panel offers the VPN. */
+    @GET("vpn.php")
+    suspend fun getVpn(@Header("Authorization") authorization: String): ResponseBody
+
     /** Frees this device's slot on the panel. */
     @POST("logout.php")
     suspend fun logout(@Header("Authorization") authorization: String): ResponseBody

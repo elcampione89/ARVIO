@@ -135,6 +135,10 @@ class AuthRepository @Inject constructor(
                 if (configRevision.isNotBlank() && configRevision != com.arflix.tv.util.PanelKeys.revision) {
                     syncPanelConfig(accessToken)
                 }
+                val vpnRevision = meJson?.optString("vpn_revision").orEmpty()
+                if (vpnRevision.isNotBlank() && vpnRevision != com.arflix.tv.vpn.VpnController.revision) {
+                    syncPanelVpn(accessToken)
+                }
                 val collectionsRevision = meJson?.optString("collections_revision").orEmpty()
                 if (collectionsRevision.isNotBlank()) {
                     syncPanelCollections(accessToken, collectionsRevision)
@@ -199,6 +203,18 @@ class AuthRepository @Inject constructor(
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             AppLogger.breadcrumb("Auth", "panel_config_failed ${e.javaClass.simpleName}", severity = "warning")
+        }
+    }
+
+    /** Loads the panel's VPN servers for the VPN switch in Settings. */
+    private suspend fun syncPanelVpn(accessToken: String) {
+        try {
+            val body = cockpitArvioApi.getVpn("Bearer $accessToken").use { it.string() }
+            com.arflix.tv.vpn.VpnController.applyPanel(body)
+            AppLogger.breadcrumb("Auth", "panel_vpn_applied")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            AppLogger.breadcrumb("Auth", "panel_vpn_failed ${e.javaClass.simpleName}", severity = "warning")
         }
     }
 
@@ -338,6 +354,7 @@ class AuthRepository @Inject constructor(
             // Install this line's panel addons in the background; sign-in does not wait for it.
             panelScope.launch {
                 syncPanelConfig(tokens.accessToken)
+                syncPanelVpn(tokens.accessToken)
                 syncPanelAddons(tokens.accessToken)
                 syncPanelCollections(tokens.accessToken)
             }
@@ -372,6 +389,8 @@ class AuthRepository @Inject constructor(
                 }
             }
         }
+        // The VPN belongs to the signed-in line.
+        runCatching { com.arflix.tv.vpn.VpnController.clear() }
         try {
             traktRepositoryProvider.get().logout()
         } catch (e: Exception) {}

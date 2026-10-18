@@ -95,6 +95,7 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
         com.arflix.tv.network.initializeNetworkPlatform(this)
         super.onCreate()
         instance = this
+        com.arflix.tv.vpn.VpnController.init(this)
 
         // Initialize global DNS provider and user agent from DataStore before network calls.
         appScope.launch(Dispatchers.IO) {

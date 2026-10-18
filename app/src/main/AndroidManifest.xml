@@ -38,6 +38,8 @@
 
     <queries>
         <package android:name="com.discord" />
+        <!-- OpenVPN for Android: the VPN switch in Settings drives it. -->
+        <package android:name="de.blinkt.openvpn" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="discord" />
