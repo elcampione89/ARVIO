@@ -30,13 +30,37 @@ if unzip -l "$work/strip.apk" | grep -q 'lib/arm64-v8a/'; then echo "64-bit libr
 
 # Native libraries are stored uncompressed, so they must be page-aligned before signing.
 "$bt/zipalign" -f -p 4 "$work/strip.apk" "$work/aligned.apk"
-# Same key and passwords the Gradle build uses. An empty key password means "same as the keystore's".
-keypass=(--key-pass env:RELEASE_KEY_PASSWORD)
-[ -n "${RELEASE_KEY_PASSWORD:-}" ] || keypass=()
-[ -n "${RELEASE_KEY_ALIAS:-}" ] || { echo "::error::RELEASE_KEY_ALIAS is empty"; exit 1; }
+# Use the key exactly as the Gradle build sees it: the release workflow writes the secrets into
+# keystore.properties, and Java's Properties parsing changes some characters (e.g. backslashes).
+# Read them back the same way so the passwords match.
+props="$work/keystore.properties"
+{
+  echo "storePassword=$RELEASE_KEYSTORE_PASSWORD"
+  echo "keyAlias=$RELEASE_KEY_ALIAS"
+  echo "keyPassword=$RELEASE_KEY_PASSWORD"
+} > "$props"
+cat > "$work/Props.java" <<'JAVA'
+import java.io.FileInputStream;
+import java.util.Properties;
+public class Props {
+  public static void main(String[] a) throws Exception {
+    Properties p = new Properties();
+    try (FileInputStream in = new FileInputStream(a[0])) { p.load(in); }
+    System.out.print(p.getProperty(a[1], ""));
+  }
+}
+JAVA
+SIGN_STORE_PASS="$(java "$work/Props.java" "$props" storePassword)"
+SIGN_KEY_PASS="$(java "$work/Props.java" "$props" keyPassword)"
+SIGN_ALIAS="$(java "$work/Props.java" "$props" keyAlias)"
+rm -f "$props"
+export SIGN_STORE_PASS SIGN_KEY_PASS
+[ -n "$SIGN_ALIAS" ] || { echo "::error::Key alias is empty"; exit 1; }
+keypass=(--key-pass env:SIGN_KEY_PASS)
+[ -n "$SIGN_KEY_PASS" ] || keypass=()
 if ! log="$("$bt/apksigner" sign \
-  --ks "$KEYSTORE_FILE" --ks-pass env:RELEASE_KEYSTORE_PASSWORD \
-  --ks-key-alias "$RELEASE_KEY_ALIAS" "${keypass[@]}" \
+  --ks "$KEYSTORE_FILE" --ks-pass env:SIGN_STORE_PASS \
+  --ks-key-alias "$SIGN_ALIAS" "${keypass[@]}" \
   --out "$out" "$work/aligned.apk" 2>&1)"; then
   # apksigner never prints the passwords; show why it failed.
   printf '%s\n' "$log" | head -n 15 | while IFS= read -r l; do echo "::error::apksigner: $l"; done
