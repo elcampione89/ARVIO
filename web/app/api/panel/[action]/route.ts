@@ -88,6 +88,28 @@ function sessionReply(token: string, user: { id?: string; email?: string; displa
   };
 }
 
+/**
+ * Sports fixtures for the Live TV sports guide: the same public feed the TV app uses
+ * (SPORTS_METADATA_URL to override). Fetched by this server and cached for two minutes, so
+ * every viewer shares one request.
+ */
+let sportsCache: { at: number; body: string } | null = null;
+async function sportsMetadata() {
+  if (sportsCache && Date.now() - sportsCache.at < 120_000) return sportsCache.body;
+  const url = (process.env.SPORTS_METADATA_URL || "").trim() || "https://auth.arvio.tv/.netlify/functions/sports-metadata";
+  try {
+    const response = await fetch(url, { headers: { Accept: "application/json", "User-Agent": "ARVIO-Web" }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
+    const body = await response.text();
+    if (!response.ok || body.length > 6_000_000) throw new Error("bad sports feed");
+    JSON.parse(body);
+    sportsCache = { at: Date.now(), body };
+  } catch {
+    // Keep serving the last good copy for up to a day; otherwise an empty guide.
+    if (!sportsCache || Date.now() - sportsCache.at > 86_400_000) return JSON.stringify({ version: 1, events: [] });
+  }
+  return sportsCache!.body;
+}
+
 async function handle(request: NextRequest, action: string) {
   const method = request.method;
   const token = bearer(request);
@@ -186,6 +208,10 @@ async function handle(request: NextRequest, action: string) {
       return new NextResponse(null, { status: 204 });
     case "catalog-packs-list":
       return json({ packs: [] });
+    case "sports-metadata":
+      return new NextResponse(await sportsMetadata(), {
+        headers: { "content-type": "application/json", "cache-control": "public, max-age=60" }
+      });
   }
   return json({ error: "Not found" }, 404);
 }
