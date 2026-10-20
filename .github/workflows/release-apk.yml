@@ -7,6 +7,9 @@ on:
     paths-ignore:
       - ".github/workflows/firestick-apk.yml"
       - ".github/scripts/make-arm32-apk.sh"
+      # The web app has its own image build (web-panel.yml); it never needs an APK.
+      - "web/**"
+      - ".github/workflows/web-panel.yml"
   workflow_dispatch:
 
 permissions:
