@@ -1,0 +1,33 @@
+# ARVIO web app for your panel, behind the Traefik that wg-easy already runs.
+# Put this file and .env in /docker/arvio-web on the VPS, then: docker compose up -d
+services:
+  arvio-web:
+    image: ghcr.io/elcampione89/arvio-web:latest
+    container_name: arvio-web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+    volumes:
+      - simkl-sessions:/app/.data/simkl-sessions
+    networks:
+      - wg-easy_default
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: wg-easy_default
+      traefik.http.routers.arvio-web.rule: Host(`${WEB_DOMAIN}`)
+      traefik.http.routers.arvio-web.entrypoints: websecure
+      traefik.http.routers.arvio-web.tls: "true"
+      traefik.http.routers.arvio-web.tls.certresolver: letsencrypt
+      traefik.http.services.arvio-web.loadbalancer.server.port: "3000"
+
+volumes:
+  simkl-sessions:
+
+networks:
+  wg-easy_default:
+    external: true

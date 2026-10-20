@@ -17,6 +17,8 @@ import { getContinueWatching, isLiveStreamOrSportsItem, pullCloudContinueWatchin
 import { completionTimes, includeIptvContinueWatching, isUnwatchedContinueWatching, mergePartialContinueWatching, mergeTrackerContinueWatching, pruneCompletedResume, traktProgressActivityKey } from "./continueWatching";
 import { createEpisodeValidator, episodeAvailabilityKey } from "./episodeAvailability";
 import { HttpError } from "./http";
+import { withPanelPlaylist } from "./panel";
+import { mergeImportedCollections, parseCustomCollections } from "./customCollections";
 import { cachedDebridDirectUrl, parseDebridStream } from "./debrid";
 import { createPendingExternalPlayback } from "./externalPlayback";
 import { trackPremiumEvent } from "./premiumAnalytics";
@@ -226,7 +228,7 @@ export const defaultSettings: AppSettings = {
   iptvFavoritesOnHome: true,
   smoothScrolling: true,
   spoilerBlur: false,
-  accentColor: "arctic",
+  accentColor: config.panelMode ? "purple" : "arctic",
   dnsProvider: "system",
   showLoadingStats: false,
   customUserAgent: "",
@@ -725,6 +727,8 @@ export function AppProvider({
   const [manageMode, setManageMode] = useState(false);
   const [view, setView] = useState<AppView>(() => {
     if (initialView) return initialView;
+    // Panel mode: nothing works without a line, so start at sign-in.
+    if (config.panelMode && !authClient.session) return "login";
     const stored = loadStored<Profile[]>(PROFILES_KEY, []);
     const activeId = loadStored<string | null>(ACTIVE_PROFILE_KEY, null);
     const skip = loadStored<AppSettings>(settingsKey, defaultSettings).skipProfileSelection;
@@ -2102,6 +2106,82 @@ export function AppProvider({
     }) });
   }, [persistAddons, updateSettings]);
 
+  // Panel mode: install the addons the panel gives this line, and remove ones the panel dropped,
+  // in each profile once per visit (the TV app does the same on every device).
+  const panelAddonsSyncedRef = useRef<string>("");
+  useEffect(() => {
+    if (!config.panelMode || !auth || !addonsReady || !cloudProfilesHydrated || !activeProfileId) return;
+    const key = `${auth.userId}:${activeProfileId}`;
+    if (panelAddonsSyncedRef.current === key) return;
+    panelAddonsSyncedRef.current = key;
+    const match = (url: string) => url.trim().toLowerCase().replace(/\/manifest\.json$/, "").replace(/\/+$/, "");
+    void (async () => {
+      try {
+        const response = await fetch("/api/panel/addons", { headers: { Authorization: `Bearer ${auth.accessToken}` }, cache: "no-store" });
+        if (!response.ok) return;
+        const data = (await response.json()) as { addons?: Array<{ url?: string }>; removed_urls?: string[] };
+        const current = addonsRef.current;
+        const have = new Set(current.map((addon) => match(addon.manifestUrl)));
+        const removed = new Set((data.removed_urls ?? []).map(match));
+        const added: InstalledAddon[] = [];
+        for (const item of data.addons ?? []) {
+          if (!item.url || have.has(match(item.url))) continue;
+          try { added.push(await installAddonManifest(item.url)); } catch { /* addon offline; try next visit */ }
+        }
+        const dropped = current.filter((addon) => removed.has(match(addon.manifestUrl)));
+        if (!added.length && !dropped.length) return;
+        if (activeProfileIdRef.current !== activeProfileId) return;
+        const next = [...added, ...addonsRef.current.filter((addon) => !dropped.some((d) => d.id === addon.id) && !added.some((a) => a.id === addon.id))];
+        await persistAddons(next, { addedIds: added.map((a) => a.id), removedIds: dropped.map((d) => d.id) });
+      } catch {
+        panelAddonsSyncedRef.current = "";
+      }
+    })();
+  }, [auth, addonsReady, cloudProfilesHydrated, activeProfileId, persistAddons]);
+
+  // Panel mode: the panel's collection packs on every profile's home screen. Same pack IDs as the
+  // TV app ("arvio-panel://collections/N"), so packs synced from a TV are updated, not duplicated.
+  const panelCollectionsSyncedRef = useRef<string>("");
+  useEffect(() => {
+    if (!config.panelMode || !auth || !cloudProfilesHydrated || !activeProfileId) return;
+    const key = `${auth.userId}:${activeProfileId}`;
+    if (panelCollectionsSyncedRef.current === key) return;
+    panelCollectionsSyncedRef.current = key;
+    const headers = { Authorization: `Bearer ${auth.accessToken}` };
+    void (async () => {
+      try {
+        const response = await fetch("/api/panel/collections", { headers, cache: "no-store" });
+        if (!response.ok) return;
+        const data = (await response.json()) as { collections?: Array<{ id?: number; name?: string | null }>; removed_ids?: number[] };
+        const packUrl = (id: number) => `arvio-panel://collections/${id}`;
+        const imported: CatalogConfig[][] = [];
+        for (const pack of data.collections ?? []) {
+          if (!pack.id) continue;
+          try {
+            const res = await fetch(`/api/panel/collection?id=${pack.id}`, { headers, cache: "no-store" });
+            if (!res.ok) continue;
+            const parsed = await parseCustomCollections(await res.text(), packUrl(pack.id));
+            const name = pack.name?.trim();
+            imported.push(name && parsed[0]?.packName === "collections" ? parsed.map((c) => ({ ...c, packName: name })) : parsed);
+          } catch { /* skip a broken pack */ }
+        }
+        const removedPackIds = new Set<string>();
+        for (const id of data.removed_ids ?? []) {
+          // Same pack ID the importer would give it.
+          const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(packUrl(id))));
+          removedPackIds.add(`usercol_${Array.from(digest.slice(0, 6), (b) => b.toString(16).padStart(2, "0")).join("")}`);
+        }
+        if (activeProfileIdRef.current !== activeProfileId) return;
+        const current = settingsRef.current.catalogs;
+        let next = current.filter((c) => !c.packId || !removedPackIds.has(c.packId));
+        for (const pack of imported) next = mergeImportedCollections(next, pack);
+        if (JSON.stringify(next) !== JSON.stringify(current)) updateSettings({ catalogs: next });
+      } catch {
+        panelCollectionsSyncedRef.current = "";
+      }
+    })();
+  }, [auth, cloudProfilesHydrated, activeProfileId, updateSettings]);
+
   const signIn = useCallback(async (email: string, password: string, mode: "sign-in" | "sign-up") => {
     const trimmedEmail = email.trim();
     if (!trimmedEmail || !password) throw new Error("Enter your email and password.");
@@ -2126,6 +2206,7 @@ export function AppProvider({
       }
       setCloudProfilesHydrated(false);
       setAuth(session);
+      if (config.panelMode) setView("profiles");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Authentication failed.";
       setToast(message);
@@ -2139,8 +2220,54 @@ export function AppProvider({
     authClient.signOut();
     setAuth(null);
     setCloudProfilesHydrated(true);
+    if (config.panelMode) {
+      setSettings((current) => ({ ...current, iptvPlaylists: [] }));
+      setView("login");
+      setToast("Signed out.");
+      return;
+    }
     setToast("Signed out of ARVIO Cloud.");
   }, []);
+
+  // Panel mode: live TV is always the signed-in line's own TV service.
+  useEffect(() => {
+    if (!config.panelMode || !auth) return;
+    const wanted = withPanelPlaylist(settings.iptvPlaylists);
+    if (JSON.stringify(wanted) !== JSON.stringify(settings.iptvPlaylists)) {
+      setSettings((current) => ({ ...current, iptvPlaylists: withPanelPlaylist(current.iptvPlaylists) }));
+    }
+  }, [auth, settings.iptvPlaylists]);
+
+  // Panel mode: the panel decides whether this line may still watch (expiry, disabled, device
+  // signed out from the panel). Check on start and when the tab comes back, at most every 10 min.
+  useEffect(() => {
+    if (!config.panelMode) return;
+    let lastCheck = 0;
+    const check = async () => {
+      const token = authClient.session?.accessToken;
+      if (!token || Date.now() - lastCheck < 10 * 60_000) return;
+      lastCheck = Date.now();
+      try {
+        const response = await fetch("/api/panel/me", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+        if (response.status === 401 || response.status === 403) {
+          let message = "Your session has ended. Please sign in again.";
+          try { message = ((await response.json()) as { message?: string }).message || message; } catch { /* keep default */ }
+          if (authClient.session?.accessToken !== token) return;
+          authClient.signOut();
+          setAuth(null);
+          setCloudProfilesHydrated(true);
+          setView("login");
+          setToast(message);
+        }
+      } catch {
+        // Offline or panel unreachable: keep watching.
+      }
+    };
+    void check();
+    const onVisible = () => { if (document.visibilityState === "visible") void check(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [auth]);
 
   const beginTrakt = useCallback(async () => {
     traktClient.setProfile(activeProfileIdRef.current);
@@ -2550,6 +2677,7 @@ export function AppProvider({
   }, []);
 
   const goToLogin = useCallback(() => {
+    if (config.panelMode) { setView("login"); return; }
     if (config.selfHosted) { setView("profiles"); return; }
     if (typeof window !== "undefined") {
       const redirectUri = partnerLoginRedirect(window.location.origin, window.location.search);

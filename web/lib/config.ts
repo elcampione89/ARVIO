@@ -5,9 +5,13 @@ function envValue(value: string | undefined, fallback = "") {
 }
 
 const selfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === "true";
+// Panel mode: accounts, profile sync, addons, collections and live TV come from an ARVIO panel
+// (your own provider panel), reached through this server's /api/panel routes.
+const panelMode = process.env.NEXT_PUBLIC_PANEL_MODE === "true";
 
 export const config = {
   selfHosted,
+  panelMode,
   // Fixed by the browser build. Missing preserves the hosted feature; runtime
   // credentials cannot re-enable a distribution that intentionally omits it.
   telegramEnabled: process.env.NEXT_PUBLIC_TELEGRAM_ENABLED !== "false",
@@ -15,7 +19,7 @@ export const config = {
   supabaseUrl: selfHosted ? "" : process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
   supabaseAnonKey: selfHosted ? "" : process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
   appAnonKey: selfHosted ? "" : envValue(process.env.NEXT_PUBLIC_ARVIO_APP_ANON_KEY, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""),
-  netlifyBackendUrl: selfHosted ? "" : process.env.NEXT_PUBLIC_NETLIFY_BACKEND_URL ?? process.env.NETLIFY_BACKEND_URL ?? "https://auth.arvio.tv/.netlify/functions",
+  netlifyBackendUrl: panelMode ? "/api/panel" : selfHosted ? "" : process.env.NEXT_PUBLIC_NETLIFY_BACKEND_URL ?? process.env.NETLIFY_BACKEND_URL ?? "https://auth.arvio.tv/.netlify/functions",
   // Next can evaluate client modules before beforeInteractive scripts execute.
   // Read bootstrap values when used, never freeze an empty module-load snapshot.
   get resolverUrl() { return browserSelfhostRuntimeConfig()?.resolverUrl ?? envValue(process.env.NEXT_PUBLIC_ARVIO_RESOLVER_URL, ""); },
@@ -24,12 +28,12 @@ export const config = {
   traktClientSecret: "",
   get simklV2ClientId() { return browserSelfhostRuntimeConfig()?.simklV2ClientId ?? (process.env.NEXT_PUBLIC_SIMKL_V2_CLIENT_ID || process.env.SIMKL_V2_CLIENT_ID || (selfHosted ? "" : "ebde0a0712da059710ba65ba3efe1edb601c2e5ae8e23c048c8d6df58ed922c2")); },
   get simklClientId() { return browserSelfhostRuntimeConfig()?.simklClientId ?? (process.env.NEXT_PUBLIC_SIMKL_CLIENT_ID || process.env.SIMKL_CLIENT_ID || ""); },
-  allowNetlifyMediaProxy: envValue(process.env.NEXT_PUBLIC_ALLOW_NETLIFY_MEDIA_PROXY, "false") === "true",
+  allowNetlifyMediaProxy: panelMode || envValue(process.env.NEXT_PUBLIC_ALLOW_NETLIFY_MEDIA_PROXY, "false") === "true",
   // Web subscription: the Ko-fi membership page the paywall links to, and a
   // master switch to enable the paywall (off by default so nothing changes for
   // users until you flip it in the environment).
   kofiUrl: envValue(process.env.NEXT_PUBLIC_KOFI_URL, ""),
-  paywallEnabled: !selfHosted && envValue(process.env.NEXT_PUBLIC_PAYWALL_ENABLED, "false") === "true",
+  paywallEnabled: !selfHosted && !panelMode && envValue(process.env.NEXT_PUBLIC_PAYWALL_ENABLED, "false") === "true",
   imageBase: "https://image.tmdb.org/t/p/w780",
   backdropBase: "https://image.tmdb.org/t/p/w1280",
   backdropOriginal: "https://image.tmdb.org/t/p/original"
@@ -75,11 +79,11 @@ export function hasSupabaseConfig() {
 }
 
 export function hasNetlifyBackendUrl() {
-  return config.netlifyBackendUrl.startsWith("https://");
+  return config.panelMode || config.netlifyBackendUrl.startsWith("https://");
 }
 
 export function hasNetlifyBackendConfig() {
-  return hasNetlifyBackendUrl() && config.appAnonKey.length > 40;
+  return config.panelMode || (hasNetlifyBackendUrl() && config.appAnonKey.length > 40);
 }
 
 export function hasResolverConfig() {
@@ -87,7 +91,7 @@ export function hasResolverConfig() {
 }
 
 export function hasTraktConfig() {
-  return hasNetlifyBackendUrl() ||
+  return (!config.panelMode && hasNetlifyBackendUrl()) ||
     (config.traktClientId.length > 10 && !config.traktClientId.startsWith("__"));
 }
 
@@ -96,7 +100,7 @@ export function hasSimklConfig() {
 }
 
 export function getAuthPortalUrl(): string {
-  if (config.selfHosted) return "/";
+  if (config.selfHosted || config.panelMode) return "/";
   const backend = config.netlifyBackendUrl;
   try {
     const url = new URL(backend);

@@ -12,6 +12,9 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const ALLOWED_HEADERS = new Set(["accept", "accept-language", "authorization", "content-type", "range", "user-agent", "referer", "origin", "x-emby-token", "x-emby-authorization", "x-plex-token"]);
 
 export function allowsMediaProxy() {
+  // Panel mode on your own server: relaying live TV (plain-HTTP streams a secure page can't
+  // load) is the point. PANEL_MEDIA_PROXY=false turns it off to save the server's bandwidth.
+  if (process.env.NEXT_PUBLIC_PANEL_MODE === "true" && !process.env.NETLIFY) return process.env.PANEL_MEDIA_PROXY !== "false";
   // A browser build flag must never turn the hosted metadata route into a CDN.
   return !process.env.NETLIFY && process.env.NODE_ENV !== "production" && process.env.ALLOW_NETLIFY_MEDIA_PROXY === "true";
 }

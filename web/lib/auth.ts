@@ -1,6 +1,7 @@
 import { config, hasNetlifyBackendConfig, hasNetlifyBackendUrl, hasSupabaseConfig } from "./config";
 import { jsonRequest } from "./http";
 import { loadStored, removeStored, saveStored } from "./storage";
+import { clearPanelLine, panelDeviceId, panelDeviceName, savePanelLine, selectedPanelServer } from "./panel";
 import type { AuthSession, UserProfile } from "./types";
 
 export const SESSION_KEY = "arvio.web.supabase.session";
@@ -10,6 +11,8 @@ interface SupabaseAuthResponse {
   refresh_token: string;
   expires_in?: number;
   user?: { id?: string; email?: string };
+  /** Panel mode: the line's TV service, used as this browser's live TV source. */
+  line?: { server_url?: string; display_name?: string };
 }
 
 export function decodeJwtPayload(token: string): Record<string, unknown> {
@@ -67,6 +70,29 @@ export class AuthClient {
   }
 
   async signIn(email: string, password: string) {
+    if (config.panelMode) {
+      const username = email.trim();
+      const response = await jsonRequest<SupabaseAuthResponse>("/api/panel/auth-login", {
+        method: "POST",
+        body: JSON.stringify({
+          username,
+          password,
+          server_id: selectedPanelServer(),
+          device_id: panelDeviceId(),
+          device_name: panelDeviceName()
+        })
+      });
+      this.session = sessionFromResponse(response, username, "netlify");
+      saveStored(SESSION_KEY, this.session);
+      savePanelLine({
+        username,
+        password,
+        serverUrl: response.line?.server_url ?? "",
+        displayName: response.line?.display_name ?? "",
+        userId: this.session.userId
+      });
+      return this.session;
+    }
     if (hasNetlifyBackendUrl()) {
       try {
         const response = await this.netlifyAuth<SupabaseAuthResponse>("auth-login", { email, password });
@@ -173,6 +199,15 @@ export class AuthClient {
   }
 
   signOut() {
+    if (config.panelMode && this.session?.accessToken) {
+      // Frees this browser's device slot on the panel. Never block signing out on it.
+      void fetch("/api/panel/logout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.session.accessToken}` },
+        keepalive: true
+      }).catch(() => undefined);
+    }
+    if (config.panelMode) clearPanelLine();
     this.session = null;
     removeStored(SESSION_KEY);
   }

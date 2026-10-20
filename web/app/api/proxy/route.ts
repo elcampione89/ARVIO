@@ -5,7 +5,8 @@ const BLOCKED_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
 const ALLOW_MEDIA_PROXY = allowsMediaProxy();
 
 export async function GET(request: NextRequest) {
-  if (!withinProxyBudget(request.headers.get("x-nf-client-connection-ip") ?? "local")) return NextResponse.json({ error: "Proxy request limit reached. Please wait." }, { status: 429, headers: { "retry-after": "60" } });
+  const viewer = request.headers.get("x-nf-client-connection-ip") ?? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  if (!withinProxyBudget(viewer)) return NextResponse.json({ error: "Proxy request limit reached. Please wait." }, { status: 429, headers: { "retry-after": "60" } });
   const input = new URL(request.url);
   const raw = input.searchParams.get("url");
   if (!raw) return NextResponse.json({ error: "Missing url" }, { status: 400 });
@@ -115,7 +116,7 @@ function cacheIptvCatalog(headers: Headers, target: URL) {
 }
 
 export async function POST(request: NextRequest) {
-  if (!withinProxyBudget(request.headers.get("x-nf-client-connection-ip") ?? "local")) return NextResponse.json({ error: "Proxy request limit reached. Please wait." }, { status: 429, headers: { "retry-after": "60" } });
+  if (!withinProxyBudget(request.headers.get("x-nf-client-connection-ip") ?? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local")) return NextResponse.json({ error: "Proxy request limit reached. Please wait." }, { status: 429, headers: { "retry-after": "60" } });
   const input = new URL(request.url);
   const raw = input.searchParams.get("url");
   if (!raw) return NextResponse.json({ error: "Missing url" }, { status: 400 });

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useApp } from "@/lib/store";
+import { config } from "@/lib/config";
 import { AddonsScreen } from "@/components/addons/AddonsScreen";
 import { DetailsDrawer } from "@/components/details/DetailsDrawer";
 import { HomeScreen } from "@/components/home/HomeScreen";
@@ -102,7 +103,7 @@ export function AppShell() {
             {section === "search" && <SearchScreen />}
             {section === "watchlist" && <WatchlistScreen />}
             {section === "tv" && <LiveTvScreen />}
-            {section === "addons" && <AddonsScreen />}
+            {section === "addons" && !config.panelMode && <AddonsScreen />}
             {section === "settings" && <SettingsScreen />}
           </>
         )}

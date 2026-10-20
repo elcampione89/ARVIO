@@ -4,6 +4,7 @@ import { useTranslation } from "@/lib/i18n";
 
 import { ArrowDown, ArrowUp, PanelLeft, CalendarClock, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, EyeOff, History, LayoutGrid, List, ListVideo, Play, Plus, RefreshCw, Search, Star, Trophy, Tv, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { config } from "@/lib/config";
 import { externalLaunchMode, openExternalPlayer } from "@/lib/externalPlayers";
 import { accessibleChannels, groupKey, loadXtreamCatchup, type CatchupProgram } from "@/lib/iptv";
 import { VirtualList } from "@/components/ui/VirtualList";
@@ -350,7 +351,7 @@ export function LiveTvScreen() {
             {enabledPlaylists.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>}
           <button type="button" className="livetv-chipbtn" onClick={() => setManaging((value) => !value)} aria-expanded={managing}>
-            <ListVideo size={17} /> {translateUi(" Playlists")}</button>
+            <ListVideo size={17} /> {config.panelMode ? translateUi("Hidden categories") : translateUi(" Playlists")}</button>
           <button type="button" className="livetv-chipbtn" onClick={() => void refreshIptv()} disabled={isLoadingTv} aria-label={translateUi("Refresh channels")}>
             <RefreshCw size={17} className={isLoadingTv ? "is-spinning" : ""} /> {isLoadingTv ? translateUi("Refreshing") : translateUi("Refresh")}
           </button>
@@ -360,7 +361,8 @@ export function LiveTvScreen() {
       {managing && (
         <section className="livetv-manage">
           {hiddenGroups.length > 0 && <div className="hidden-groups"><strong>{translateUi("Hidden categories")}</strong>{hiddenGroups.map((group) => <button type="button" key={group} className="secondary" onClick={() => setSettings({ ...settings, hiddenGroupIds: hiddenGroups.filter((id) => id !== group) })}><Eye size={16} />{group.includes("|") ? group.slice(group.indexOf("|") + 1) : group}</button>)}</div>}
-          {playlists.map((playlist) => (
+          {/* Panel mode: the line's own TV service is the only source; nothing to add or remove. */}
+          {!config.panelMode && playlists.map((playlist) => (
             <div className="livetv-manage-row" key={playlist.id}>
               <button
                 type="button"
@@ -385,12 +387,13 @@ export function LiveTvScreen() {
               </button>
             </div>
           ))}
-          <div className="livetv-manage-add">
+          {!config.panelMode && <div className="livetv-manage-add">
             <input value={name} onChange={(event) => setName(event.target.value)} placeholder={translateUi("Name")} aria-label={translateUi("Playlist name")} />
             <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder={translateUi("M3U / Xtream URL (or host user pass)")} aria-label={translateUi("Playlist URL")} />
             <input value={epgUrl} onChange={(event) => setEpgUrl(event.target.value)} placeholder={translateUi("EPG URL (optional)")} aria-label={translateUi("EPG URL")} />
             <button type="button" className="primary" onClick={addPlaylist}><Plus size={17} /> {translateUi(" Add")}</button>
-          </div>
+          </div>}
+          {config.panelMode && !hiddenGroups.length && <p className="muted">{translateUi("No hidden categories.")}</p>}
         </section>
       )}
 
@@ -401,7 +404,7 @@ export function LiveTvScreen() {
         </div>
       )}
 
-      {!playlists.length && !channels.length && !managing && !hasSportsAddons && (
+      {!config.panelMode && !playlists.length && !channels.length && !managing && !hasSportsAddons && (
         <section className="livetv-empty">
           <Tv size={44} />
           <h3>{translateUi("Add your IPTV playlist")}</h3>

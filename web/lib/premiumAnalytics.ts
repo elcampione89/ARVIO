@@ -52,7 +52,7 @@ function storageSet(storage: Storage | undefined, key: string, value: string) {
 }
 
 function analyticsAllowed() {
-  if (config.selfHosted) return false;
+  if (config.selfHosted || config.panelMode) return false;
   if (typeof navigator === "undefined") return true;
   return navigator.doNotTrack !== "1" && !("globalPrivacyControl" in navigator && navigator.globalPrivacyControl === true);
 }

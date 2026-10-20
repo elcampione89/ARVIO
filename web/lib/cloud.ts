@@ -5,6 +5,7 @@ import { loadStored, saveStored } from "./storage";
 import { config, hasNetlifyBackendUrl } from "./config";
 import { parseHomeServerConnectionJson, serializeHomeServerConnectionJson } from "./homeserver";
 import { jsonRequest } from "./http";
+import { withPanelPlaylist, withoutPanelPlaylist } from "./panel";
 import { mergeTvSessions, normalizeTvSession } from "./iptvSession";
 import { normalizeIptvPlaylist as normalizeRuntimeIptvPlaylist } from "./iptv";
 import { tmdbImageUrl } from "./mediaImages";
@@ -529,7 +530,7 @@ function iptvFromAndroid(value: unknown, root?: RawPayload): Partial<AppSettings
     ...legacyPlaylists
   ]);
   return {
-    iptvPlaylists: playlists,
+    iptvPlaylists: withPanelPlaylist(playlists),
     favoriteChannelIds: value !== undefined ? stringArray(state.favoriteChannels) : stringArray(rootState.iptvFavoriteChannels),
     iptvTvSession: normalizeTvSession((state as Record<string, unknown>).tvSession),
     favoriteGroupIds: value !== undefined ? stringArray(state.favoriteGroups) : stringArray(rootState.iptvFavoriteGroups),
@@ -834,10 +835,11 @@ export async function saveCloudAddons(
 }
 
 function androidIptvSettings(settings: AppSettings): Record<string, unknown> {
+  const playlists = withoutPanelPlaylist(settings.iptvPlaylists);
   return {
-    m3uUrl: settings.iptvPlaylists[0]?.m3uUrl ?? "",
-    epgUrl: settings.iptvPlaylists[0]?.epgUrl ?? "",
-    playlists: settings.iptvPlaylists,
+    m3uUrl: playlists[0]?.m3uUrl ?? "",
+    epgUrl: playlists[0]?.epgUrl ?? "",
+    playlists,
     stalkerPortalUrl: settings.iptvStalkerUrl,
     stalkerMacAddress: settings.iptvStalkerMac,
     favoriteChannels: settings.favoriteChannelIds,
@@ -926,7 +928,7 @@ export async function saveCloudSettings(
     // partial in-memory addon list must never leak into the shared payload.
     void addons;
     const { customTmdbApiKey: _k1, customTvdbApiKey: _k2, customTvdbUserPin: _k3, ...sanitizedSettings } = settings;
-    root.settings = sanitizedSettings;
+    root.settings = { ...sanitizedSettings, iptvPlaylists: withoutPanelPlaylist(sanitizedSettings.iptvPlaylists ?? []) };
 
     // ── Genuine global settings that Android merges by per-field timestamp. Only write + bump the
     //    timestamp when the web actually changed the field vs its baseline; otherwise leave the
@@ -996,7 +998,8 @@ export async function saveCloudSettings(
     root.iptvStalkerMac = iptv.stalkerMacAddress;
     root.iptvM3uUrl = iptv.m3uUrl;
     root.iptvEpgUrl = iptv.epgUrl;
-    root.settings = { ...sanitizedSettings, ...catalogValues, ...iptvFromAndroid(iptv) };
+    const iptvValues = iptvFromAndroid(iptv);
+    root.settings = { ...sanitizedSettings, ...catalogValues, ...iptvValues, iptvPlaylists: withoutPanelPlaylist(iptvValues.iptvPlaylists ?? []) };
 
     if (profiles.length) root.profiles = profiles;
     if (profileId) {

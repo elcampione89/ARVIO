@@ -128,7 +128,11 @@ const SECTIONS = [
   { id: "credits", label: "About & Credits", icon: Eye },
 ] as const;
 
-const VISIBLE_SECTIONS = SECTIONS.filter(section => config.telegramEnabled || section.id !== "telegram");
+// Panel mode: live TV, addons and API keys come from the provider's panel, so their settings
+// (which would show server addresses and addon links) are hidden, like in the TV app.
+const PANEL_HIDDEN_SECTIONS: ReadonlySet<string> = new Set(["tv", "addons", "telegram", "metadata"]);
+const VISIBLE_SECTIONS = SECTIONS.filter(section =>
+  (config.telegramEnabled || section.id !== "telegram") && !(config.panelMode && PANEL_HIDDEN_SECTIONS.has(section.id)));
 
 type SectionId = (typeof SECTIONS)[number]["id"];
 
@@ -1124,7 +1128,7 @@ function SectionBody({ section }: { section: SectionId }) {
         </Panel>
       );
     case "tv":
-      return <TvSettingsSection />;
+      return config.panelMode ? null : <TvSettingsSection />;
     case "homeserver":
       return <HomeServerSection />;
     case "telegram":
@@ -1132,11 +1136,11 @@ function SectionBody({ section }: { section: SectionId }) {
     case "catalogs":
       return <CatalogsSection />;
     case "addons":
-      return <AddonsSection />;
+      return config.panelMode ? null : <AddonsSection />;
     case "vlc":
       return <VlcSection />;
     case "metadata":
-      return <MetadataSection settings={settings} set={set} />;
+      return config.panelMode ? null : <MetadataSection settings={settings} set={set} />;
     default:
       return null;
   }
@@ -1362,7 +1366,7 @@ function AccountsSection() {
   return (
     <>
       <PremiumAccount />
-      <Panel title={config.selfHosted ? translateUi("Local Account") : translateUi("ARVIO Account")}>
+      <Panel title={config.panelMode ? translateUi("Your account") : config.selfHosted ? translateUi("Local Account") : translateUi("ARVIO Account")}>
         {!cloudConfigured && (
           <p className="empty">
             {config.selfHosted ? translateUi("Profiles and settings are saved in this browser. ARVIO Cloud is not connected.") : translateUi("ARVIO Cloud backend env is missing. Add backend values in web/.env.local.")}
@@ -1413,7 +1417,7 @@ function AccountsSection() {
             <UserCircle size={34} />
             <div className="account-copy">
               <strong>{auth.email}</strong>
-              <span title={auth.userId}>{translateUi("ARVIO Cloud account")}</span>
+              <span title={auth.userId}>{config.panelMode ? translateUi("Signed in") : translateUi("ARVIO Cloud account")}</span>
             </div>
             <button type="button" className="secondary" onClick={signOut}>
               <LogOut size={18} /> {translateUi(" Sign out")}</button>

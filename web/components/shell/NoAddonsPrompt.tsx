@@ -4,6 +4,7 @@ import { Puzzle, Server, Tv, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "@/lib/i18n";
 import { useApp } from "@/lib/store";
+import { config } from "@/lib/config";
 import { requestSourceSettings, sourceSetupState } from "@/lib/sourceSetup";
 
 const DISMISS_KEY_PREFIX = "arvio.web.noAddonsPrompt.v1:";
@@ -21,6 +22,8 @@ export function NoAddonsPrompt() {
   }, [profileId]);
 
   const sources = sourceSetupState(addons, settings);
+  // Panel mode: the provider supplies the sources; there is nothing for viewers to set up.
+  if (config.panelMode) return null;
   if (view !== "app" || section !== "home" || !profileId || !addonsReady || sources.hasAny ||
     dismissal?.profileId !== profileId || dismissal.dismissed) return null;
 

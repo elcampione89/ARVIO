@@ -22,6 +22,8 @@ const nextConfig = {
     NEXT_PUBLIC_BUILD_STAMP: buildStamp,
     // Deployment mode is fixed at build time, never selected by a visitor.
     NEXT_PUBLIC_SELF_HOSTED: process.env.NEXT_PUBLIC_SELF_HOSTED === "true" ? "true" : "false",
+    // Panel mode (accounts and sync from an ARVIO panel) is also fixed at build time.
+    NEXT_PUBLIC_PANEL_MODE: process.env.NEXT_PUBLIC_PANEL_MODE === "true" ? "true" : "false",
     // Only the independently built Unraid preview disables this integration.
     // Missing configuration keeps the hosted application's current behavior.
     NEXT_PUBLIC_TELEGRAM_ENABLED: telegramEnabled ? "true" : "false",
