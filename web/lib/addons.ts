@@ -1,10 +1,10 @@
 import { addonServesOwnMeta, nativeStreamTarget } from "./addonNative";
 import { jsonRequest, proxiedUrl } from "./http";
-import { hasResolverConfig } from "./config";
+import { config, hasResolverConfig } from "./config";
 import { getResolverStreamsProgressive } from "./resolver";
 import { loadStored, saveStored } from "./storage";
 import { isBrowserPlayableStream, isIosPlayableStream } from "./streamCompatibility";
-import { isInformationalAddonStream } from "./addonStreamInfo";
+import { isInformationalAddonStream, isUncachedDebridStream } from "./addonStreamInfo";
 import type { AddonCatalog, InstalledAddon, MediaItem, StreamSource, SubtitleTrack } from "./types";
 
 const ADDON_KEY = "arvio.web.installed.addons";
@@ -258,14 +258,17 @@ export async function getStreamsProgressive(
   episode?: number,
   onUpdate?: (streams: StreamSource[], batch: StreamSource[]) => void
 ) {
-  const update = onUpdate ? (streams: StreamSource[], batch: StreamSource[]) =>
-    onUpdate(streams.filter(stream => !isInformationalAddonStream(stream)), batch.filter(stream => !isInformationalAddonStream(stream))) : undefined;
+  // Panel mode: only results the debrid has already cached (uncached ones would have to
+  // download first and rarely start in a browser). The TV app keeps its own behaviour.
+  const hidden = (stream: StreamSource) => isInformationalAddonStream(stream) || (config.panelMode && isUncachedDebridStream(stream));
+  const visible = (streams: StreamSource[]) => streams.filter(stream => !hidden(stream));
+  const update = onUpdate ? (streams: StreamSource[], batch: StreamSource[]) => onUpdate(visible(streams), visible(batch)) : undefined;
   // Native addon items are only known to the addon that serves them, by its own ids.
   const native = await nativeStreamTarget(item, season, episode);
   if (native) {
     if (!native.ids.length) return [];
     const owners = addons.filter((addon) => addonServesOwnMeta(addon, native.requestType, native.metaId));
-    return getBrowserStreamsProgressive(owners, item, season, episode, onUpdate, native.ids, native.requestType);
+    return visible(await getBrowserStreamsProgressive(owners, item, season, episode, update, native.ids, native.requestType));
   }
   if (hasResolverConfig()) {
     const browserPromise = getBrowserStreamsProgressive(addons, item, season, episode, update)
@@ -280,12 +283,12 @@ export async function getStreamsProgressive(
       });
     const [browserResolved, resolved] = await Promise.all([browserPromise, resolverPromise]);
     const merged = sortStreams(dedupeStreams([...browserResolved, ...resolved])
-      .filter((stream) => !isInformationalAddonStream(stream) && (stream.url || stream.infoHash || stream.description || stream.source)));
-    if (merged.length) onUpdate?.(merged, browserResolved);
+      .filter((stream) => !hidden(stream) && (stream.url || stream.infoHash || stream.description || stream.source)));
+    if (merged.length) onUpdate?.(merged, visible(browserResolved));
     return merged;
   }
 
-  return getBrowserStreamsProgressive(addons, item, season, episode, onUpdate);
+  return visible(await getBrowserStreamsProgressive(addons, item, season, episode, update));
 }
 
 async function getBrowserStreamsProgressive(

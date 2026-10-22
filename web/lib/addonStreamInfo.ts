@@ -38,3 +38,15 @@ export function isInformationalAddonStream(stream: AddonStreamEntry): boolean {
   // opaque /stream URL this way: a film may legitimately share a notice's title.
   return isDiagnostic && /\.(?:html?|txt|json|png|jpe?g|gif|svg)$/i.test(url.pathname);
 }
+
+/**
+ * A debrid result the service hasn't cached yet: it would have to download the file before it
+ * can play, so it usually fails or hangs. Addons mark these in their labels (AIOStreams ⏳,
+ * Torrentio "[RD download]") or with behaviorHints.cached = false.
+ */
+const uncachedLabel = /⏳|\[[^\]\n]{0,12}(?:download|⬇)[^\]\n]{0,6}\]|\buncached\b|\bnot cached\b/i;
+export function isUncachedDebridStream(stream: AddonStreamEntry & { behaviorHints?: { cached?: boolean | null } | null }): boolean {
+  if (stream.behaviorHints?.cached === false) return true;
+  const labels = [stream.name, stream.title, stream.source, stream.description].filter((value): value is string => typeof value === "string");
+  return labels.some(value => uncachedLabel.test(value));
+}
