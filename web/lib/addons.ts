@@ -1,6 +1,6 @@
 import { addonServesOwnMeta, nativeStreamTarget } from "./addonNative";
 import { jsonRequest, proxiedUrl } from "./http";
-import { config, hasResolverConfig } from "./config";
+import { hasResolverConfig } from "./config";
 import { getResolverStreamsProgressive } from "./resolver";
 import { loadStored, saveStored } from "./storage";
 import { isBrowserPlayableStream, isIosPlayableStream } from "./streamCompatibility";
@@ -260,7 +260,8 @@ export async function getStreamsProgressive(
 ) {
   // Panel mode: only results the debrid has already cached (uncached ones would have to
   // download first and rarely start in a browser). The TV app keeps its own behaviour.
-  const hidden = (stream: StreamSource) => isInformationalAddonStream(stream) || (config.panelMode && isUncachedDebridStream(stream));
+  const panelMode = process.env.NEXT_PUBLIC_PANEL_MODE === "true";
+  const hidden = (stream: StreamSource) => isInformationalAddonStream(stream) || (panelMode && isUncachedDebridStream(stream));
   const visible = (streams: StreamSource[]) => streams.filter(stream => !hidden(stream));
   const update = onUpdate ? (streams: StreamSource[], batch: StreamSource[]) => onUpdate(visible(streams), visible(batch)) : undefined;
   // Native addon items are only known to the addon that serves them, by its own ids.
