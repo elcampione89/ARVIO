@@ -56,9 +56,21 @@ export function safeProxyHeaders(headers: HeadersInit = {}) {
 export async function safeProxyFetch(target: URL, init: RequestInit, options: { maxBytes?: number; textOnly?: boolean } = {}): Promise<Response> {
   let current = target;
   let headers = safeProxyHeaders(init.headers);
-  const signal = AbortSignal.any([AbortSignal.timeout(25_000), ...(init.signal ? [init.signal] : [])]);
+  // The 25 s limit covers connecting and the reply headers. A film relayed in panel mode then
+  // streams for as long as it plays, so its timer is cleared once the reply starts.
+  const timeout = new AbortController();
+  const timer = setTimeout(() => {
+    const error = new Error("The proxy target timed out");
+    error.name = "TimeoutError";
+    timeout.abort(error);
+  }, 25_000);
+  (timer as { unref?: () => void }).unref?.();
+  const signal = AbortSignal.any([timeout.signal, ...(init.signal ? [init.signal] : [])]);
   const allowMedia = !options.textOnly && allowsMediaProxy();
-  const maxBytes = Math.min(MAX_BYTES, options.maxBytes ?? MAX_BYTES);
+  // Panel mode relaying a film or episode (IPTV VOD): no size cap, and the IPTV server may send
+  // it on to a plain-http address (the browser only ever sees this https relay).
+  const mediaRelay = allowMedia && (isMediaProxyTarget(target) || new Headers(init.headers).has("range"));
+  const maxBytes = mediaRelay ? Number.MAX_SAFE_INTEGER : Math.min(MAX_BYTES, options.maxBytes ?? MAX_BYTES);
   for (let hop = 0; hop <= 4; hop++) {
     signal.throwIfAborted();
     if (!['https:', 'http:'].includes(current.protocol) || current.username || current.password) throw new Error("Blocked proxy target");
@@ -85,7 +97,7 @@ export async function safeProxyFetch(target: URL, init: RequestInit, options: { 
       await response.body?.cancel(); await agent.destroy();
       if (!location || hop === 4) throw new Error("Invalid proxy redirect");
       const next = new URL(location, current);
-      if (current.protocol === 'https:' && next.protocol !== 'https:') throw new Error("Insecure proxy redirect");
+      if (current.protocol === 'https:' && next.protocol !== 'https:' && !mediaRelay) throw new Error("Insecure proxy redirect");
       if (current.origin !== next.origin) {
         // A target may redirect, but it may not forward another server's credentials.
         headers = new Headers({ accept: headers.get("accept") ?? "*/*" });
@@ -94,6 +106,7 @@ export async function safeProxyFetch(target: URL, init: RequestInit, options: { 
       current = next;
       continue;
     }
+    if (mediaRelay) clearTimeout(timer);
     const type = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
     const imageResponse = !allowMedia && !options.textOnly && type.startsWith("image/");
     const limit = imageResponse ? Math.min(maxBytes, MAX_IMAGE_BYTES) : maxBytes;
