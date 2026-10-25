@@ -13178,3 +13178,9 @@ html { background: #000; }
 .search-filters .secondary, .search-pagination .secondary, .search-hero ~ .library-error .secondary, .download-entry .secondary {
   width: auto; min-height: 44px; padding: 0 18px; border-radius: 12px; font-size: 14px;
 }
+
+/* Collection tiles take the same column widths as the normal rows (any screen size), and the
+   card ends with its picture when the title is hidden (no empty strip underneath). */
+.custom-collection-rail > .rail-scroll-shell > .rail-strip { display: grid; }
+.custom-collection-rail .custom-collection-tile,
+.custom-collection-rail .custom-collection-tile.is-poster { flex: none; width: 100%; min-height: 0; }

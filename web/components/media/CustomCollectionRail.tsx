@@ -17,7 +17,9 @@ export function CustomCollectionRail({ catalog, folders, onOpen, onCollectionOpe
     return () => onCollectionOpenChange?.(false);
   }, [selectedId, onCollectionOpenChange]);
   if (!folders.length) return null;
-  return <section className="rail custom-collection-rail">
+  // Same columns as the normal rows: a rail of poster tiles uses the poster rail sizes.
+  const posters = folders.every(f => String(f.collectionTileShape).toUpperCase() === "POSTER");
+  return <section className={`rail custom-collection-rail${posters ? " is-poster" : ""}`}>
     <div className="rail-head"><h3>{catalog.name}</h3></div>
     <RailScroller className="rail-strip" ariaLabel={catalog.name}>
       {folders.map(folder => <CollectionTile key={`${folder.id}:${folder.collectionCoverImageUrl}`} folder={folder} onOpen={() => setSelectedId(folder.id)} />)}
