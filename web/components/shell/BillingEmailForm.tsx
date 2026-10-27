@@ -9,10 +9,10 @@ import { HttpError } from "@/lib/http";
 import { authClient, useApp } from "@/lib/store";
 import { trackPremiumEvent } from "@/lib/premiumAnalytics";
 
-export function BillingEmailForm({ onEntitled }: { onEntitled: (state: EntitlementState) => void }) {
+export function BillingEmailForm({ onEntitled, initiallyOpen = false }: { onEntitled: (state: EntitlementState) => void; initiallyOpen?: boolean }) {
   const translateUi = useTranslation();
   const { auth, goToLogin } = useApp();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [verification, setVerification] = useState(false);
@@ -33,7 +33,7 @@ export function BillingEmailForm({ onEntitled }: { onEntitled: (state: Entitleme
       const next = await linkKofiEmail(authClient, email.trim(), verification ? code.trim() : undefined);
       if (authClient.session?.userId !== accountId) return;
       if (next.verificationRequired) setVerification(true);
-      else if (next.entitled) {
+      else if (next.entitled && next.reason === "subscription") {
         void trackPremiumEvent(authClient, "membership_linked");
         onEntitled(next);
         setOpen(false); setCode(""); setVerification(false);

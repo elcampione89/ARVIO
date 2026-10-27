@@ -349,6 +349,11 @@ object OkHttpProvider {
         }
     }
 
+    /** Empties the shared HTTP disk cache (sign-out). */
+    fun clearHttpCache() {
+        runCatching { appHttpCache?.evictAll() }
+    }
+
     private fun getOrCreateHttpCache(context: Context): Cache {
         return appHttpCache ?: synchronized(clientLock) {
             appHttpCache ?: Cache(File(context.cacheDir, "http_cache"), HTTP_CACHE_SIZE).also {

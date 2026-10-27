@@ -20,6 +20,9 @@ import com.arflix.tv.ui.components.catalogueRowLayoutPreferencePrefixFor
 import com.arflix.tv.ui.components.normalizeCardLayoutMode
 import com.arflix.tv.ui.components.profileCatalogueRowLayoutModeKey
 import com.arflix.tv.util.LAST_APP_LANGUAGE_KEY
+import com.arflix.tv.util.HOME_PRESENTATION_VERSION
+import com.arflix.tv.util.canMergeHomePresentationSetting
+import com.arflix.tv.util.restoreHomePresentation
 import com.arflix.tv.util.resolveAppLanguage
 import com.arflix.tv.util.IPTV_FAVORITES_ON_HOME
 import com.arflix.tv.util.AppLogger
@@ -323,10 +326,14 @@ class CloudSyncRepository @Inject constructor(
         val autoPlayMinQuality: String = "Any",
         val autoPlayMaxQuality: String? = null,
         val autoPlayMaxSizeGb: Int? = null,
+        val homePresentationVersion: Int = 0,
         val trailerAutoPlay: Boolean = true,
         val trailerSoundEnabled: Boolean = false,
         val trailerDelaySeconds: Int = 1,
         val trailerInCards: Boolean = true,
+        // Null from older clients: keep the local preference.
+        val netflixHomeStyle: Boolean? = null,
+        val watchlistOnHome: Boolean? = null,
         val clockFormat: String = "24h",
         val guideRowCount: Int? = null,
         val showBudget: Boolean = true,
@@ -365,6 +372,10 @@ class CloudSyncRepository @Inject constructor(
         profileManager.profileBooleanKeyFor(profileId, "trailer_sound_enabled")
     private fun trailerInCardsKeyFor(profileId: String) =
         profileManager.profileBooleanKeyFor(profileId, "trailer_in_cards")
+    private fun netflixHomeStyleKeyFor(profileId: String) =
+        profileManager.profileBooleanKeyFor(profileId, com.arflix.tv.ui.screens.home.NETFLIX_HOME_STYLE_KEY)
+    private fun watchlistOnHomeKeyFor(profileId: String) =
+        profileManager.profileBooleanKeyFor(profileId, com.arflix.tv.util.WATCHLIST_ON_HOME)
     private fun trailerDelayKeyFor(profileId: String) =
         profileManager.profileStringKeyFor(profileId, "trailer_delay_seconds")
     private fun clockFormatKeyFor(profileId: String) =
@@ -660,6 +671,16 @@ class CloudSyncRepository @Inject constructor(
         val allKeys = LinkedHashSet<String>().apply { addAll(mergeKeysOf(base)); addAll(mergeKeysOf(other)) }
         for (key in allKeys) {
             if (key.startsWith("i:")) continue
+            if (key.startsWith("p:")) {
+                val rest = key.substring(2)
+                val profileId = rest.substringBefore(':')
+                val baseVersion = base.optJSONObject("profileSettingsById")
+                    ?.optJSONObject(profileId)?.optInt("homePresentationVersion", 0) ?: 0
+                val otherVersion = other.optJSONObject("profileSettingsById")
+                    ?.optJSONObject(profileId)?.optInt("homePresentationVersion", 0) ?: 0
+                // A legacy timestamp must not reintroduce pre-2.3 defaults on push or pull.
+                if (!canMergeHomePresentationSetting(rest.substringAfter(':'), baseVersion, otherVersion)) continue
+            }
             val bt = baseTs.optLong(key, 0L)
             val ot = otherTs.optLong(key, 0L)
             if (ot > bt) {
@@ -704,10 +725,13 @@ class CloudSyncRepository @Inject constructor(
                         defaultAudioLanguage = prefs[defaultAudioLanguageKeyFor(profile.id)] ?: "Auto (Original)",
                         contentLanguage = resolveAppLanguage(prefs, profile.id),
 
-                        trailerAutoPlay = prefs[trailerAutoPlayKeyFor(profile.id)] ?: true,
+                        homePresentationVersion = HOME_PRESENTATION_VERSION,
+                        trailerAutoPlay = prefs[trailerAutoPlayKeyFor(profile.id)] ?: false,
                         trailerSoundEnabled = prefs[trailerSoundEnabledKeyFor(profile.id)] ?: false,
                         trailerDelaySeconds = prefs[trailerDelayKeyFor(profile.id)]?.toIntOrNull() ?: 1,
-                        trailerInCards = prefs[trailerInCardsKeyFor(profile.id)] ?: true,
+                        trailerInCards = prefs[trailerInCardsKeyFor(profile.id)] ?: false,
+                        netflixHomeStyle = prefs[netflixHomeStyleKeyFor(profile.id)] ?: true,
+                        watchlistOnHome = prefs[watchlistOnHomeKeyFor(profile.id)] ?: false,
                         clockFormat = prefs[clockFormatKeyFor(profile.id)] ?: "24h",
                         guideRowCount = prefs[guideRowCountKeyFor(profile.id)]?.toIntOrNull()
                             ?.takeIf { it in 6..10 } ?: 0,
@@ -1115,10 +1139,18 @@ class CloudSyncRepository @Inject constructor(
         // Field-level merge against the already-loaded remote: keep local fields we changed more
         // recently, but never overwrite a cloud field with an older local value. This is what stops
         // a stale device from reverting a peer's setting (even via the pull's pre-push).
-        val effectivePayload = if (existingRemotePayload != null) {
+        val timestampMerged = if (existingRemotePayload != null) {
             mergeSettingsByTimestamp(baseStr = trackingMerged, otherStr = existingRemotePayload).json
         } else {
             trackingMerged
+        }
+
+        // The profile list merges into the account's instead of replacing it, so a device that
+        // missed another device's new profile cannot delete it (ProfileListMerge).
+        val effectivePayload = if (existingRemotePayload != null) {
+            mergeRemoteProfiles(timestampMerged, existingRemotePayload)
+        } else {
+            timestampMerged
         }
 
         val payloadHash = try {
@@ -1232,6 +1264,24 @@ class CloudSyncRepository @Inject constructor(
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             localPayload
+        }
+    }
+
+    private suspend fun mergeRemoteProfiles(localPayload: String, remotePayload: String): String {
+        val deletedHere = profileRepository.getDeletedProfileIds()
+        return try {
+            ProfileListMerge.merge(JSONObject(localPayload), JSONObject(remotePayload), deletedHere).toString()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "Profile merge failed; keeping the remote profile list", e)
+            // Never fall back to the local list: that is the replacement this merge prevents.
+            try {
+                val local = JSONObject(localPayload)
+                val remote = JSONObject(remotePayload)
+                local.put("profiles", remote.optJSONArray("profiles") ?: return localPayload).toString()
+            } catch (_: Exception) {
+                localPayload
+            }
         }
     }
 
@@ -1545,7 +1595,9 @@ class CloudSyncRepository @Inject constructor(
         val avatarImagesById = root.optJSONObject("profileAvatarImagesById")
         root.optJSONArray("profiles")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
             val type = TypeToken.getParameterized(List::class.java, Profile::class.java).type
-            val profiles: List<Profile> = gson.fromJson(json, type) ?: emptyList()
+            val deletedIds = ProfileListMerge.deletedIds(root)
+            val profiles: List<Profile> = (gson.fromJson<List<Profile>>(json, type) ?: emptyList())
+                .filterNot { it.id in deletedIds }
             val activeProfileId = root.optString("activeProfileId").ifBlank { null }
             if (profiles.isNotEmpty()) {
                 val localProfilesById = profileRepository.getProfiles().associateBy { it.id }
@@ -1637,10 +1689,14 @@ class CloudSyncRepository @Inject constructor(
                                 .edit().putString("locale_tag", state.contentLanguage).apply()
                         }
 
-                        prefs[trailerAutoPlayKeyFor(profileId)] = state.trailerAutoPlay
+                        restoreHomePresentation(
+                            prefs, profileId, state.homePresentationVersion,
+                            state.trailerAutoPlay, state.netflixHomeStyle
+                        )
                         prefs[trailerSoundEnabledKeyFor(profileId)] = state.trailerSoundEnabled
                         prefs[trailerDelayKeyFor(profileId)] = state.trailerDelaySeconds.toString()
                         prefs[trailerInCardsKeyFor(profileId)] = state.trailerInCards
+                        state.watchlistOnHome?.let { prefs[watchlistOnHomeKeyFor(profileId)] = it }
                         prefs[clockFormatKeyFor(profileId)] = state.clockFormat
                         // Older clients omit this field; keep the local preference in that case.
                         state.guideRowCount?.let { count ->

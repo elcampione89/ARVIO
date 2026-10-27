@@ -18,8 +18,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Per-profile store of each title's [RecentPlayedSource]: one record per title, the most
- * recently played [MAX_TITLES] titles kept.
+ * Per-profile store of [RecentPlayedSource]s: one record per movie and one per episode, so each
+ * episode remembers its own source. The most recently played [MAX_RECORDS] are kept.
  */
 @Singleton
 class RecentPlayedSourceRepository @Inject constructor(
@@ -31,11 +31,15 @@ class RecentPlayedSourceRepository @Inject constructor(
     // Saves outlive the player screen: leaving right after the threshold must not drop the write.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** The active profile's record for this title, whichever episode it was for. */
-    suspend fun get(mediaType: MediaType, mediaId: Int): RecentPlayedSource? = withContext(Dispatchers.IO) {
+    /** The active profile's record for this movie or episode ([season]/[episode] are TMDB numbers). */
+    suspend fun get(mediaType: MediaType, mediaId: Int, season: Int?, episode: Int?): RecentPlayedSource? = withContext(Dispatchers.IO) {
         try {
             val raw = context.streamDataStore.data.first()[profileManager.profileStringKey(RECORDS_KEY)].orEmpty()
-            decode(raw)[titleKey(mediaType, mediaId)]
+            val records = decode(raw)
+            // Older versions kept one record per show under the title key; it still counts for
+            // the episode it was saved for.
+            (records[recordKey(mediaType, mediaId, season, episode)] ?: records[recordKey(mediaType, mediaId, null, null)])
+                ?.takeIf { it.appliesTo(mediaType, mediaId, season, episode) }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "read failed: ${e.message}")
@@ -43,17 +47,17 @@ class RecentPlayedSourceRepository @Inject constructor(
         }
     }
 
-    /** Replaces the title's record. [profileId] is the profile that watched it. */
+    /** Replaces the record for the record's movie or episode. [profileId] is the profile that watched it. */
     fun save(profileId: String, record: RecentPlayedSource) {
         scope.launch {
             try {
                 val key = profileManager.profileStringKeyFor(profileId, RECORDS_KEY)
                 context.streamDataStore.edit { prefs ->
                     val records = decode(prefs[key].orEmpty()) +
-                        (titleKey(record.mediaType, record.mediaId) to record)
+                        (recordKey(record.mediaType, record.mediaId, record.season, record.episode) to record)
                     val kept = records.entries
                         .sortedByDescending { it.value.playedAtMs }
-                        .take(MAX_TITLES)
+                        .take(MAX_RECORDS)
                         .associate { it.key to it.value }
                     prefs[key] = gson.toJson(kept)
                 }
@@ -71,11 +75,13 @@ class RecentPlayedSourceRepository @Inject constructor(
         }.getOrNull().orEmpty()
     }
 
-    private fun titleKey(mediaType: MediaType, mediaId: Int) = "${mediaType.name}:$mediaId"
+    private fun recordKey(mediaType: MediaType, mediaId: Int, season: Int?, episode: Int?) =
+        if (season == null || episode == null) "${mediaType.name}:$mediaId"
+        else "${mediaType.name}:$mediaId:$season:$episode"
 
     private companion object {
         const val TAG = "RecentPlayedSource"
         const val RECORDS_KEY = "recent_played_sources_v1"
-        const val MAX_TITLES = 200
+        const val MAX_RECORDS = 500
     }
 }

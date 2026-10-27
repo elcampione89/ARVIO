@@ -20,20 +20,20 @@ function links(html) {
   }));
 }
 
-test('Premium displays a real, prominent Ko-fi subscription before the separate trial', () => {
+test('Premium displays a real, prominent Ko-fi subscription before the feature preview', () => {
   const anchors = links(premium);
   const subscribe = anchors.find(link => link.placement === 'hero-membership');
-  const trial = anchors.find(link => link.placement === 'hero-trial');
+  const preview = anchors.find(link => link.placement === 'hero-preview');
   assert.equal(subscribe.href, membership);
   assert.ok(subscribe.classes.includes('button') && subscribe.classes.includes('membership-button'));
   assert.ok(!subscribe.classes.includes('secondary'));
-  assert.ok(anchors.indexOf(subscribe) < anchors.indexOf(trial));
-  assert.equal(trial.href, 'https://web.arvio.tv/?intent=trial');
-  assert.ok(trial.classes.includes('trial-button'));
+  assert.ok(anchors.indexOf(subscribe) < anchors.indexOf(preview));
+  assert.equal(preview.href, 'https://web.arvio.tv/');
+  assert.ok(preview.classes.includes('preview-button'));
   assert.match(premium, /<strong>\$2\.99<\/strong>/u);
   assert.match(premium, /24\/7 · ARVIO Web/u);
   assert.match(premium, /Monthly membership\. Cancel anytime through Ko-fi\./u);
-  assert.match(premium, /No payment required\./u);
+  assert.doesNotMatch(premium, /trial|No payment required/iu);
   assert.match(premium, /Android &amp; TV stay free/u);
 });
 
@@ -50,10 +50,37 @@ test('Every Premium locale has explicit recurring membership terms and a localiz
     const termKey = locale.startsWith('no-') ? 'nb' : locale in terms ? locale : base;
     assert.equal(copy.membershipTerms, terms[termKey], locale);
     assert.match(copy.join, /Ko-fi/u, locale);
+    assert.ok(copy.explore.endsWith(' ARVIO Web'), locale);
+    for (const key of ['trial', 'trialNoPayment', 'trialEligibility', 'afterTrial']) {
+      assert.equal(Object.hasOwn(copy, key), false, `${locale}: stale ${key}`);
+    }
     if (base !== 'en') assert.notEqual(copy.membershipTerms, terms.en, locale);
   }
   assert.match(copies['nl-NL'].coffee, /24\/7/u);
   assert.match(copies['en-US'].coffee, /monthly coffee/u);
+});
+
+test('Public Premium routes and generation sources never promise free trial access', () => {
+  for (const file of [
+    'index.html', 'es/index.html', 'pt-br/index.html', 'premium/index.html',
+    'arvio-web/index.html', 'es/arvio-web/index.html', 'pt-br/arvio-web/index.html',
+    'browser-playback-guide/index.html', 'premium-redirect.html', 'premium-redirect.js',
+    'scripts/build-premium.py', 'scripts/generate-localized-homepages.mjs',
+    'scripts/generate-localized-guides.mjs', 'media-kit/reviewer-brief.txt',
+  ]) {
+    assert.doesNotMatch(read(file), /\btrial\b|Iniciar teste gratuito|Iniciar prueba gratuita|Try it free for 3 days/iu, file);
+  }
+});
+
+test('Legacy Premium redirects lead to the preview without requesting a trial', () => {
+  const { premiumDestination } = require('../premium-redirect');
+  for (const placement of ['', '/nav', '/hero', '/spotlight', '/preview', '/details', '/faq', '/footer']) {
+    const target = new URL(premiumDestination('/go/premium' + placement));
+    assert.equal(target.origin, 'https://web.arvio.tv');
+    assert.equal(target.searchParams.has('intent'), false);
+    assert.equal(target.searchParams.get('utm_campaign'), 'premium');
+  }
+  assert.equal(new URL(premiumDestination('/go/membership/nav')).origin, 'https://ko-fi.com');
 });
 
 test('English, Spanish and Portuguese homepages subscribe directly without losing the benefits route', () => {

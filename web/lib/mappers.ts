@@ -11,6 +11,7 @@ export function historyToItem(entry: WatchHistoryEntry): MediaItem {
   const remaining = Math.max(0, (entry.duration_seconds ?? 0) - (entry.position_seconds ?? 0));
   return {
     id: entry.show_tmdb_id,
+    ...(entry.addon_native_id ? { addonNativeId: entry.addon_native_id, addonNativeAddonId: entry.addon_native_addon_id } : {}),
     title,
     subtitle: entry.media_type === "tv" ? `S${entry.season ?? 1} E${entry.episode ?? 1}` : "Movie",
     mediaType: entry.media_type,

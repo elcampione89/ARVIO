@@ -82,6 +82,9 @@
 # Calendar's persisted schedule is read through Gson, including after app updates.
 -keep class com.arflix.tv.data.repository.CalendarTvSchedule { *; }
 
+# SIMKL playback checkpoints must retain stable JSON fields in optimized releases.
+-keep class com.arflix.tv.data.repository.simkl.SimklSyncService$PersistedSimklSnapshot { *; }
+
 # Complete sports catalogue cache is deserialized reflectively in signed builds.
 -keep class com.arflix.tv.ui.screens.tv.live.SportsScheduleSnapshot { *; }
 -keep class com.arflix.tv.ui.screens.tv.live.SportsScheduleKey { *; }

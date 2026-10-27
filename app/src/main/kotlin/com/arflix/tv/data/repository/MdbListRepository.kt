@@ -18,6 +18,7 @@ import com.arflix.tv.data.api.MdbScrobbleBody
 import com.arflix.tv.data.api.MdbShowInfo
 import com.arflix.tv.data.api.MdbTmdbRef
 import com.arflix.tv.data.api.MdbTokenResponse
+import com.arflix.tv.data.api.MdbUserList
 import com.arflix.tv.data.api.MdbWatchedBody
 import com.arflix.tv.data.api.MdbWatchedEpisodeRef
 import com.arflix.tv.data.api.MdbWatchedSeasonRef
@@ -393,6 +394,105 @@ class MdbListRepository @Inject constructor(
             false
         }
     }
+
+    // ===== The user's own lists =====
+    // Shapes live-checked 2026-10-21: `lists/user` rows carry id/name/slug/user_name/dynamic;
+    // `lists/{id}/items?unified=true` is a flat array of {id, mediatype, title, release_year,
+    // ids:{tmdb,...}}. Both are fetched with no-cache (MDBList marks them public for 15 min).
+
+    /**
+     * The user's lists. Dynamic (filter-based) lists cannot take items, so "Add to list" asks
+     * with [includeDynamic] = false; the Library shows them all.
+     */
+    suspend fun getUserLists(includeDynamic: Boolean = false): List<MdbUserList> = withContext(Dispatchers.IO) {
+        if (!isConnected()) return@withContext emptyList()
+        try {
+            executeWithAuth { authHeader, apiKey -> api.getUserLists(authHeader = authHeader, apiKey = apiKey) }
+                .orEmpty()
+                .filter { it.id > 0 && (includeDynamic || it.dynamic != true) }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            AppLogger.e(TAG, "user lists failed", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * The titles in one of the user's lists, in list order; empty when it cannot be read.
+     * The API returns at most [LIST_ITEMS_PAGE] titles per request, so every page is read: a
+     * missing page would leave titles out of the Library and show them unticked in the picker.
+     */
+    suspend fun listItems(listId: Long): List<MediaItem> = withContext(Dispatchers.IO) {
+        val rows = fetchAllPages(LIST_ITEMS_PAGE, LIST_ITEMS_MAX_PAGES) { offset ->
+            val json = try {
+                executeWithAuth { authHeader, apiKey ->
+                    api.getListItems(
+                        listId = listId,
+                        authHeader = authHeader,
+                        apiKey = apiKey,
+                        limit = LIST_ITEMS_PAGE,
+                        offset = offset
+                    )
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                AppLogger.e(TAG, "list items failed at offset $offset", e)
+                null
+            } ?: return@fetchAllPages null
+            when {
+                json.isJsonArray -> json.asJsonArray.toList()
+                json.isJsonObject -> listOf("items", "movies", "shows")
+                    .flatMap { key -> json.asJsonObject.getAsJsonArray(key)?.toList().orEmpty() }
+                else -> emptyList()
+            }
+        } ?: return@withContext emptyList()
+        rows.mapIndexedNotNull { index, row ->
+            val obj = row.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapIndexedNotNull null
+            fun text(name: String) = obj.get(name)?.takeIf { it.isJsonPrimitive }?.asString
+            val tmdb = obj.getAsJsonObject("ids")?.get("tmdb")?.takeIf { it.isJsonPrimitive }?.asString?.toIntOrNull()
+                ?: text("tmdb_id")?.toIntOrNull()
+                ?: return@mapIndexedNotNull null
+            MediaItem(
+                id = tmdb,
+                title = text("title").orEmpty(),
+                year = text("release_year").orEmpty(),
+                mediaType = if (text("mediatype") == "movie") MediaType.MOVIE else MediaType.TV,
+                sourceOrder = index
+            )
+        }.distinctBy { it.mediaType to it.id }
+    }
+
+    /** Keys ("MOVIE:tmdbId" / "TV:tmdbId") of the titles in one of the user's lists. */
+    suspend fun listItemKeys(listId: Long): Set<String> =
+        listItems(listId).map { "${it.mediaType.name}:${it.id}" }.toSet()
+
+    /** Adds a title to, or removes it from, one of the user's lists; true only when MDBList applied it. */
+    suspend fun modifyList(listId: Long, mediaType: MediaType, tmdbId: Int, add: Boolean): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val body = if (mediaType == MediaType.MOVIE) {
+                    MdbWatchlistModifyBody(movies = listOf(MdbTmdbRef(tmdbId)))
+                } else {
+                    MdbWatchlistModifyBody(shows = listOf(MdbTmdbRef(tmdbId)))
+                }
+                val response = executeWithAuth { authHeader, apiKey ->
+                    api.modifyList(
+                        listId = listId,
+                        action = if (add) "add" else "remove",
+                        authHeader = authHeader,
+                        apiKey = apiKey,
+                        body = body
+                    )
+                }
+                listChangeAccepted(response, mediaType, add).also { accepted ->
+                    if (!accepted) AppLogger.w(TAG, "list ${if (add) "add" else "remove"} not applied: $response")
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                AppLogger.e(TAG, "list ${if (add) "add" else "remove"} failed", e)
+                false
+            }
+        }
 
     suspend fun getWatchlist(): RemoteWatchlistResult = withContext(Dispatchers.IO) {
         if (!isConnected()) return@withContext RemoteWatchlistResult(connected = false, items = null, rawCount = 0)

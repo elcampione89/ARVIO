@@ -57,4 +57,11 @@ class CollectionPresentationTest {
         assertNull(collectionCompactBudget(movie.copy(mediaType = MediaType.TV)))
         assertNull(collectionCompactBudget(movie.copy(budget = 0)))
     }
+
+    @Test fun `server community scores are never presented as IMDb or TMDB`() {
+        val server = MediaItem(1, "Server movie", isHomeServer = true, rating = "7.9", tmdbRating = "7.9")
+        assertNull(collectionRating(server))
+        assertEquals("IMDb 8.2", collectionRating(server.copy(imdbRating = "8.2")))
+        assertNull(collectionRating(server.copy(imdbRating = "N/A")))
+    }
 }

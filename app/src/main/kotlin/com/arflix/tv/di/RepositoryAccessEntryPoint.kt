@@ -2,6 +2,7 @@ package com.arflix.tv.di
 
 import com.arflix.tv.data.api.TmdbApi
 import com.arflix.tv.data.repository.CloudSyncInvalidationBus
+import com.arflix.tv.data.repository.KidsContentFilter
 import com.arflix.tv.data.repository.MediaRepository
 import com.arflix.tv.data.repository.ProfileManager
 import com.arflix.tv.data.repository.ProfileRepository
@@ -25,4 +26,6 @@ interface RepositoryAccessEntryPoint {
 
     /** The discover filter "hide watched" reads the watched lists from here. */
     fun traktRepository(): TraktRepository
+
+    fun kidsContentFilter(): KidsContentFilter
 }

@@ -245,7 +245,10 @@ data class StreamSource(
     // that are intentionally separate from behaviorHints.filename.
     val addonTitle: String? = null,
     // Explicit source metadata only; discovery is deferred until a preview is requested.
-    val preview: StreamPreviewMetadata? = null
+    val preview: StreamPreviewMetadata? = null,
+    // Ephemeral resolved YouTube tracks, never persisted as collection URLs.
+    val youTubeAudioUrl: String? = null,
+    val youTubeFallbackUrl: String? = null
 ) : Serializable
 
 enum class StreamPreviewKind { JELLYFIN, PLEX, EMBY, WEBVTT, IMAGE_HLS, BIF }

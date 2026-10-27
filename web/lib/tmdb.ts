@@ -1,4 +1,5 @@
 import { addonServesOwnMeta, findAddonServingOwnMeta, getNativeDetails, getNativeSeasonEpisodes, isAddonNative, registerNativeItem } from "./addonNative";
+import { isYouTubeItem, youTubeCatalogItems, youTubeDetails } from "./youtubeCollection";
 import { config } from "./config";
 import { apiProxiedUrl, jsonRequest, proxiedUrl } from "./http";
 import { fetchAniZipMappingByTmdbId } from "./metadata/anizip";
@@ -257,6 +258,14 @@ export async function loadCatalog(
       sourceUrl: catalog.sourceUrl,
       layout: catalog.layout ?? "landscape"
     };
+  }
+
+  if (catalog.sourceType === "youtube") {
+    const items = youTubeCatalogItems(catalog);
+    return items.length ? {
+      id: catalog.id, title: catalog.name, items,
+      sourceLabel: "YOUTUBE", layout: catalog.layout ?? "landscape"
+    } : null;
   }
 
   // Favorite TV is the profile's IPTV favorites; Home renders it from the channel list.
@@ -1414,6 +1423,7 @@ const basicItemCache = new Map<string, MediaItem | null>();
 
 /** Lightweight details fetch (no append_to_response) with an in-memory cache — used to hydrate catalog rows. */
 export async function getCollectionPreview(item: MediaItem, language: string): Promise<MediaItem> {
+  if (isYouTubeItem(item)) return youTubeDetails(item) ?? item;
   if (isAddonNative(item)) return (await getNativeDetails(item)) ?? item;
   const details = await tmdb<TmdbItem>(`${item.mediaType}/${item.id}`, { language, append_to_response: "external_ids" });
   return { ...item, ...mapTmdbItem(details, item.mediaType), budget: details.budget,
@@ -1499,6 +1509,7 @@ export async function getTitlesForSearch(
 }
 
 export async function getDetails(item: MediaItem, priorityConfig?: ProviderPriorityConfig) {
+  if (isYouTubeItem(item)) return youTubeDetails(item) ?? item;
   if (isAddonNative(item)) return (await getNativeDetails(item).catch(() => null)) ?? item;
   try {
     const details = await fetchDetailsPayload(item, priorityConfig?.customTmdbApiKey);

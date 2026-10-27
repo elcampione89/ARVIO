@@ -9,7 +9,11 @@ import com.arflix.tv.data.model.Addon
 import com.arflix.tv.util.AppLogger
 import com.arflix.tv.util.Constants
 import com.arflix.tv.util.authDataStore
+import com.arflix.tv.util.profilesDataStore
 import com.arflix.tv.util.settingsDataStore
+import com.arflix.tv.util.telegramDataStore
+import com.arflix.tv.util.traktDataStore
+import kotlinx.coroutines.withContext
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,7 +67,11 @@ class AuthRepository @Inject constructor(
     private val streamRepositoryProvider: Provider<StreamRepository>,
     private val traktRepositoryProvider: Provider<TraktRepository>,
     private val catalogRepositoryProvider: Provider<CatalogRepository>,
-    private val profileRepositoryProvider: Provider<ProfileRepository>
+    private val profileRepositoryProvider: Provider<ProfileRepository>,
+    private val telegramRepositoryProvider: Provider<com.arflix.tv.data.telegram.TelegramRepository>,
+    private val launcherContinueWatchingProvider: Provider<LauncherContinueWatchingRepository>,
+    private val traktOutboxProvider: Provider<TraktOutboxRepository>,
+    private val pluginDataStoreProvider: Provider<com.arflix.tv.data.local.PluginDataStore>
 ) {
     private val TAG = "AuthRepository"
 
@@ -406,11 +414,33 @@ class AuthRepository @Inject constructor(
         }
         // The VPN belongs to the signed-in line.
         runCatching { com.arflix.tv.vpn.VpnController.clear() }
-        try {
-            traktRepositoryProvider.get().logout()
-        } catch (e: Exception) {}
-        context.authDataStore.edit { prefs -> prefs.clear() }
-        context.settingsDataStore.edit { prefs -> prefs.clear() }
+
+        runCatching { traktRepositoryProvider.get().logout() }
+
+        // Clear ALL local data (auth + settings + user preferences)
+        runCatching { context.authDataStore.edit { prefs -> prefs.clear() } }
+        runCatching { context.settingsDataStore.edit { prefs -> prefs.clear() } }
+
+        // Everything else the account left on this device. Addons especially: a later sign-in
+        // merges local addons into the new account's list, so an old account's addresses (with
+        // their debrid keys) would move into the next account and sync to its other devices.
+        listOf(
+            context.streamDataStore,
+            context.traktDataStore,
+            context.profilesDataStore,
+            context.telegramDataStore
+        ).forEach { store -> runCatching { store.edit { prefs -> prefs.clear() } } }
+        runCatching { traktOutboxProvider.get().clearAll() }
+        runCatching { pluginDataStoreProvider.get().clearAll() }
+        runCatching { launcherContinueWatchingProvider.get().clearPublishedPrograms() }
+        // Deleting the Telegram files and the HTTP cache walks large directories: keep it off the
+        // main thread, where sign-out is started, and finish it before the app restarts.
+        withContext(Dispatchers.IO) {
+            runCatching { telegramRepositoryProvider.get().disconnect() }
+            runCatching { com.arflix.tv.network.OkHttpProvider.clearHttpCache() }
+            runCatching { deleteAccountLocalFiles(context) }
+        }
+
         _userProfile.value = null
         _authState.value = AuthState.NotAuthenticated
     }

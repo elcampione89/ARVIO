@@ -78,6 +78,7 @@ import com.arflix.tv.util.settingsDataStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Check
@@ -164,6 +165,7 @@ import com.arflix.tv.data.model.MediaType
 import com.arflix.tv.data.model.Review
 import com.arflix.tv.data.model.StreamSource
 import com.arflix.tv.data.repository.MdbExternalRating
+import com.arflix.tv.data.repository.YouTubeCollection
 import com.arflix.tv.network.OkHttpProvider
 import com.arflix.tv.ui.components.EpisodeContextMenu
 import com.arflix.tv.ui.components.KeepScreenOn
@@ -190,6 +192,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.input.key.onKeyEvent
+import com.arflix.tv.ui.components.ListPickerMenu
 import com.arflix.tv.ui.components.Toast
 import com.arflix.tv.ui.components.topBarFocusedItem
 import com.arflix.tv.ui.components.topBarMaxIndex
@@ -259,9 +262,38 @@ fun DetailsScreen(
     onBack: () -> Unit
 ) {
     val isRtlLayoutDirection = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val rawUiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val kidsFilterState by viewModel.kidsFilterState.collectAsStateWithLifecycle()
+    val listPicker by viewModel.listPicker.collectAsStateWithLifecycle()
+    // A kids profile sees the rows age-filtered; any other profile gets the state unchanged.
+    val uiState = remember(rawUiState, kidsFilterState) {
+        viewModel.applyKidsFilter(rawUiState, kidsFilterState)
+    }
+    // "Add to list" sits at the end of the action row, after "View Collection" when present,
+    // so the D-pad button indices stay contiguous; -1 hides it (no Trakt/MDBList connected).
+    var hasPersonalLists by remember(mediaType, mediaId) { mutableStateOf(false) }
+    LaunchedEffect(mediaType, mediaId) {
+        hasPersonalLists = mediaId > 0 && viewModel.hasPersonalLists()
+    }
     val usePosterCards = rememberCatalogueRowLayoutMode("details:similar") == CardLayoutMode.POSTER
     val context = LocalContext.current
+    // A title can be reached from anywhere (a person's page, a deep link, an old Continue
+    // Watching entry), so a kids profile judges the title itself and leaves when it fails.
+    // Until the verdict is in, the page stays on its loading skeleton and ignores input: no
+    // buttons, no trailer, nothing to start before the age check has passed.
+    var kidsApproved by remember(mediaType, mediaId) { mutableStateOf(false) }
+    LaunchedEffect(mediaType, mediaId, kidsFilterState.isActive) {
+        if (!kidsFilterState.isActive) return@LaunchedEffect
+        if (viewModel.isAllowedForKids(mediaType, mediaId)) {
+            kidsApproved = true
+        } else {
+            android.widget.Toast.makeText(
+                context, R.string.kids_title_blocked, android.widget.Toast.LENGTH_LONG
+            ).show()
+            onBack()
+        }
+    }
+    val kidsGatePending = kidsFilterState.isActive && !kidsApproved
     val lifecycleOwner = LocalLifecycleOwner.current
     val isMobile = LocalDeviceType.current.isTouchDevice()
 
@@ -444,6 +476,14 @@ fun DetailsScreen(
         }
     }
 
+    val hasCollectionButton = uiState.collectionId != null
+    val listButtonIndex = when {
+        !hasPersonalLists -> -1
+        hasCollectionButton -> 6
+        else -> 5
+    }
+    val maxActionButtonIndex = 4 + (if (hasCollectionButton) 1 else 0) + (if (hasPersonalLists) 1 else 0)
+    val currentListButtonIndex = rememberUpdatedState(listButtonIndex)
     val currentUiState = rememberUpdatedState(uiState)
     val currentEpisodeIndex = rememberUpdatedState(episodeIndex)
     val currentSelectedEpisodeIdentity = rememberUpdatedState(selectedEpisodeIdentity)
@@ -455,7 +495,7 @@ fun DetailsScreen(
             val selectedEp = state.episodes.firstOrNull {
                 it.identity == currentSelectedEpisodeIdentity.value
             }
-            when (idx) {
+            if (idx == currentListButtonIndex.value) viewModel.openListPicker() else when (idx) {
                 0 -> { // Play
                     val season = if (mediaType == MediaType.TV) {
                         selectedEp?.seasonNumber
@@ -482,7 +522,17 @@ fun DetailsScreen(
                         state.playPositionMs
                     } else null
 
-                    if (!state.autoPlaySingleSource) {
+                    val youTubeVideoId = YouTubeCollection.videoIdFromMetaId(state.imdbId)
+                    if (youTubeVideoId != null) {
+                        // A YouTube collection video has exactly one source: play it as if
+                        // it had been picked, whatever the autoplay setting says.
+                        val stream = YouTubeCollection.stream(youTubeVideoId)
+                        viewModel.recordPlayedEpisode(mediaId, null)
+                        onNavigateToPlayer(
+                            mediaType, mediaId, null, state.imdbId,
+                            stream.url, stream.addonId, stream.source, startPositionMs
+                        )
+                    } else if (!state.autoPlaySingleSource) {
                         // Autoplay OFF → open the source picker; never auto-play.
                         showStreamSelector = true
                         val identity = selectedEp?.identity ?: state.episodes.firstOrNull {
@@ -608,8 +658,12 @@ fun DetailsScreen(
         verticalMinRepeatIntervalMs = 112L
     )
     val keyModifier = if (isMobile) Modifier else Modifier.onPreviewKeyEvent { event ->
+                if (kidsGatePending) {
+                    if (event.type == KeyEventType.KeyUp && (event.key == Key.Back || event.key == Key.Escape)) onBack()
+                    return@onPreviewKeyEvent true
+                }
                 // Check if any modal is showing — let the modal handle all keys exclusively
-                if (showStreamSelector || showEpisodeContextMenu || showSeasonContextMenu || uiState.showPersonModal || showTrailerPlayer) {
+                if (showStreamSelector || showEpisodeContextMenu || showSeasonContextMenu || uiState.showPersonModal || showTrailerPlayer || listPicker != null) {
                     return@onPreviewKeyEvent false
                 }
                 if (event.type == KeyEventType.KeyUp && isArvioDpadNavigationKey(event.key)) {
@@ -692,7 +746,7 @@ fun DetailsScreen(
                             } else {
                                 handleRight(
                                     focusedSection, buttonIndex, episodeIndex, ratingsIndex, seasonIndex, castIndex, reviewIndex, similarIndex, collectionIndex,
-                                    if (uiState.collectionId != null) 5 else 4,
+                                    maxActionButtonIndex,
                                     uiState.episodes.size,
                                     (uiState.episodes.size + 11) / 12,
                                     uiState.totalSeasons,
@@ -724,7 +778,7 @@ fun DetailsScreen(
                                     reviewCount = uiState.reviews.size,
                                     similarCount = uiState.similar.size,
                                     collectionCount = uiState.collectionItems.size,
-                                    maxButtonIndex = if (uiState.collectionId != null) 5 else 4,
+                                    maxButtonIndex = maxActionButtonIndex,
                                     isTv = isTV,
                                     hasRatingsSection = isTV && hasEpisodes && uiState.showEpisodeRatings && hasAnyValidRating
                                 )
@@ -754,7 +808,7 @@ fun DetailsScreen(
                                     reviewCount = uiState.reviews.size,
                                     similarCount = uiState.similar.size,
                                     collectionCount = uiState.collectionItems.size,
-                                    maxButtonIndex = if (uiState.collectionId != null) 5 else 4,
+                                    maxButtonIndex = maxActionButtonIndex,
                                     isTv = isTV,
                                     hasRatingsSection = isTV && hasEpisodes && uiState.showEpisodeRatings && hasAnyValidRating
                                 )
@@ -866,7 +920,7 @@ fun DetailsScreen(
     ) {
         // Main content - full screen with sidebar overlay (same as HomeScreen)
         Crossfade(
-            targetState = uiState.isLoading || uiState.item == null,
+            targetState = uiState.isLoading || uiState.item == null || kidsGatePending,
             animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
             label = "details_loading_crossfade"
         ) { loading ->
@@ -909,6 +963,7 @@ fun DetailsScreen(
                         collectionItems = uiState.collectionItems,
                         collectionName = uiState.collectionName,
                         hasCollectionAction = uiState.collectionId != null,
+                        listButtonIndex = listButtonIndex,
                         collectionIndex = collectionIndex,
                         focusedSection = focusedSection,
                         buttonIndex = buttonIndex,
@@ -1098,19 +1153,35 @@ fun DetailsScreen(
             }
         )
 
-        // Toast notifications
-        uiState.toastMessage?.let { message ->
-            Toast(
-                message = message,
-                type = when (uiState.toastType) {
-                    com.arflix.tv.ui.screens.details.ToastType.SUCCESS -> com.arflix.tv.ui.components.ToastType.SUCCESS
-                    com.arflix.tv.ui.screens.details.ToastType.ERROR -> com.arflix.tv.ui.components.ToastType.ERROR
-                    com.arflix.tv.ui.screens.details.ToastType.INFO -> com.arflix.tv.ui.components.ToastType.INFO
-                },
-                isVisible = true,
-                durationMs = if (uiState.toastType == com.arflix.tv.ui.screens.details.ToastType.ERROR) 8000 else 4000,
-                onDismiss = { viewModel.dismissToast() }
+        listPicker?.let { picker ->
+            ListPickerMenu(
+                title = picker.item.title,
+                isLoading = picker.isLoading,
+                choices = picker.choices,
+                busyKeys = picker.busyKeys,
+                onToggle = viewModel::toggleListMembership,
+                onDismiss = {
+                    viewModel.closeListPicker()
+                    runCatching { focusRequester.requestFocus() }
+                }
             )
+        }
+
+        // Toast notifications, above the list picker whose results they report
+        uiState.toastMessage?.let { message ->
+            Box(modifier = Modifier.fillMaxSize().zIndex(70f)) {
+                Toast(
+                    message = message,
+                    type = when (uiState.toastType) {
+                        com.arflix.tv.ui.screens.details.ToastType.SUCCESS -> com.arflix.tv.ui.components.ToastType.SUCCESS
+                        com.arflix.tv.ui.screens.details.ToastType.ERROR -> com.arflix.tv.ui.components.ToastType.ERROR
+                        com.arflix.tv.ui.screens.details.ToastType.INFO -> com.arflix.tv.ui.components.ToastType.INFO
+                    },
+                    isVisible = true,
+                    durationMs = if (uiState.toastType == com.arflix.tv.ui.screens.details.ToastType.ERROR) 8000 else 4000,
+                    onDismiss = { viewModel.dismissToast() }
+                )
+            }
         }
     }
 }
@@ -1134,6 +1205,7 @@ private fun DetailsContent(
     collectionItems: List<MediaItem> = emptyList(),
     collectionName: String? = null,
     hasCollectionAction: Boolean = collectionItems.isNotEmpty(),
+    listButtonIndex: Int = -1,
     collectionIndex: Int = 0,
     focusedSection: FocusSection,
     buttonIndex: Int,
@@ -1558,6 +1630,16 @@ private fun DetailsContent(
                                 .height(54.dp),
                             onClick = { onButtonClick(4) }
                         )
+                        if (listButtonIndex >= 0) {
+                            MobileIconActionButton(
+                                icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                                contentDescription = stringResource(R.string.list_add_to),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(54.dp),
+                                onClick = { onButtonClick(listButtonIndex) }
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(18.dp))
@@ -2094,7 +2176,7 @@ private fun DetailsContent(
                 val hasSecondaryMetadata = primaryNetworkLogo != null ||
                     hasRatingMetadata ||
                     hasBudgetMetadata
-                val overviewMaxHeight = if (isCompactHeight) 58.dp else 68.dp
+                val overviewMaxHeight = if (isCompactHeight) 78.dp else 88.dp
 
                 val separatorStyle = ArflixTypography.caption.copy(
                     fontSize = 13.sp,
@@ -2242,9 +2324,11 @@ private fun DetailsContent(
 
                 val displayOverview = item.overview
 
+                // Wider than the metadata column: the overview has the space to its side, and the
+                // extra width shows far more of it in the same three lines.
                 Box(
                     modifier = Modifier
-                        .width(420.dp)
+                        .width(minOf(820.dp, configuration.screenWidthDp.dp * 0.66f).coerceAtLeast(420.dp))
                         .heightIn(max = overviewMaxHeight)
                 ) {
                     Text(
@@ -2256,8 +2340,8 @@ private fun DetailsContent(
                             shadow = textShadow
                         ),
                         color = Color.White,
-                        // Larger text, one line fewer: still fits overviewMaxHeight.
-                        maxLines = 3,
+                        // Four lines at this width; still fits overviewMaxHeight.
+                        maxLines = 4,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -2333,6 +2417,17 @@ private fun DetailsContent(
                                 icon = Icons.Default.Star,
                                 text = stringResource(R.string.view_collection),
                                 isFocused = focusSectionForUi == FocusSection.BUTTONS && buttonIndex == 5,
+                                isIconOnly = true
+                            )
+                        }
+                    }
+
+                    if (listButtonIndex >= 0) {
+                        Box(modifier = Modifier.clickable { onButtonClick(listButtonIndex) }) {
+                            PremiumActionButton(
+                                icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                                text = stringResource(R.string.list_add_to),
+                                isFocused = focusSectionForUi == FocusSection.BUTTONS && buttonIndex == listButtonIndex,
                                 isIconOnly = true
                             )
                         }

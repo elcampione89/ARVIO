@@ -1,6 +1,7 @@
 package com.arflix.tv.ui.components
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -26,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -99,6 +101,8 @@ fun MediaCard(
     onClick: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    artworkPainter: Painter? = null,
+    artworkHeight: Dp? = null,
 ) {
     // If this is a placeholder card, show skeleton only
     if (item.isPlaceholder) {
@@ -160,8 +164,8 @@ fun MediaCard(
     val context = LocalContext.current
     val density = LocalDensity.current
     val overlayBrush: Brush? = null  // Gradient removed per user feedback
-    val imageRequest = remember(rawImageUrl, item.backdrop, width, aspectRatio, isMobile, isChannelLogo, isCollectionTile) {
-        if (rawImageUrl == null) return@remember null
+    val imageRequest = remember(rawImageUrl, item.backdrop, width, aspectRatio, isMobile, isChannelLogo, isCollectionTile, artworkPainter != null) {
+        if (rawImageUrl == null || artworkPainter != null) return@remember null
         val widthPx = with(density) { width.roundToPx() }
         val heightPx = (widthPx / aspectRatio).toInt().coerceAtLeast(1)
         // Collection tiles and channel logos keep their own artwork rules.
@@ -218,7 +222,7 @@ fun MediaCard(
         ArvioFocusableSurface(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(aspectRatio),
+                .then(if (artworkHeight != null) Modifier.height(artworkHeight) else Modifier.aspectRatio(aspectRatio)),
             shape = shape,
             backgroundColor = ArvioSkin.colors.surface,
             outlineColor = ArvioSkin.colors.focusOutline,
@@ -239,7 +243,7 @@ fun MediaCard(
         ) { _ ->
             Box(modifier = Modifier.fillMaxSize()) {
                 // Channel logos can be transparent: never leave placeholder text behind them.
-                if (!artworkIsOpaque) Box(
+                if (!artworkIsOpaque && artworkPainter == null) Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .then(if (isChannelLogo) Modifier.background(ArvioSkin.colors.surface)
@@ -258,7 +262,9 @@ fun MediaCard(
                         )
                     }
                 }
-                if (imageRequest != null) {
+                if (artworkPainter != null) {
+                    Image(artworkPainter, item.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                } else if (imageRequest != null) {
                     AsyncImage(
                         model = imageRequest,
                         contentDescription = item.title,
@@ -784,26 +790,65 @@ fun FeaturedMediaCard(
         }
     }
 
-    Column(Modifier.width(width).testTag("home_trailer_card_${item.mediaType}_${item.id}")) {
-        HomeTrailerPreview(
-            youtubeKey = trailerKey,
-            // A spring can briefly cross its target before overshooting. Wait
-            // for a stable size so that crossing cannot create/release WebViews.
-            delayMs = trailerDelayMs,
-            autoplayNotBeforeMs = autoplayNotBeforeMs,
-            volume = trailerVolume,
-            // The player is mounted only once expansion has reached its final size.
-            enabled = kotlin.math.abs(width.value - artworkWidth.value) < 0.5f,
-            modifier = Modifier.fillMaxWidth().height(height).background(Color.Black)
-        ) {
-            if (imageUrl != null) {
-                AsyncImage(
-                    model = imageUrl,
-                    contentDescription = item.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().clickable(onClick = onClick)
-                )
-            }
+    val shape = rememberArvioCardShape(ArvioSkin.radius.md)
+    // Remaining focus delay, fixed when the card opens so recompositions don't restart it.
+    val startDelayMs = remember(item.id, item.mediaType, trailerKey) {
+        autoplayNotBeforeMs?.let { (it - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L) }
+            ?: trailerDelayMs
+    }
+    // The player is mounted only once expansion has reached its final size.
+    val expanded = kotlin.math.abs(width.value - artworkWidth.value) < 0.5f
+
+    ArvioFocusableSurface(
+        modifier = Modifier.size(width, height).testTag("home_trailer_card_${item.mediaType}_${item.id}"),
+        shape = shape,
+        backgroundColor = Color(0xFF1A1A1A),
+        outlineColor = ArvioSkin.colors.focusOutline,
+        outlineWidth = 2.5.dp,
+        focusedScale = 1f,
+        pressedScale = 0.97f,
+        animateFocus = false,
+        enableSystemFocus = false,
+        isFocusedOverride = true,
+        onClick = onClick,
+    ) { _ ->
+        if (imageUrl != null) {
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = item.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
         }
+        if (trailerKey != null && expanded) {
+            TrailerPlayer(
+                youtubeKey = trailerKey,
+                delayMs = startDelayMs,
+                volume = trailerVolume,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        // Bottom gradient so title text is readable over the backdrop/trailer
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.55f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.85f)
+                    )
+                )
+        )
+        Text(
+            text = item.title,
+            style = ArvioSkin.typography.cardTitle,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+        )
     }
 }

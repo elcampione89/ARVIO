@@ -10,6 +10,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.filters.SdkSuppress
+import androidx.test.platform.app.InstrumentationRegistry
 import com.arflix.tv.util.DeviceType
 import com.arflix.tv.util.LocalDeviceType
 import com.arflix.tv.data.repository.IptvPlaylistEntry
@@ -50,6 +51,57 @@ class SettingsRemoteInputDeviceTest {
         compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
         compose.waitForIdle()
         verify(exactly = 1) { viewModel.setAutoPlayNext(false) }
+    }
+
+    @Test fun numpadEnterActivatesTheHighlightedSettingOnce() {
+        show()
+        compose.onRoot().performKeyInput { pressKey(Key.NumPadEnter) }
+        verify(exactly = 1) { viewModel.setAutoPlayNext(false) }
+    }
+
+    @Test fun switchingFromDeepPlaybackToLanguageStartsAtItsFirstRow() {
+        show()
+        repeat(12) { compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) } }
+        compose.onRoot().performKeyInput {
+            pressKey(Key.DirectionLeft)
+            pressKey(Key.DirectionDown)
+            pressKey(Key.DirectionRight)
+        }
+        assertRowVisible(0)
+        compose.onRoot().performKeyInput {
+            pressKey(Key.DirectionDown)
+            pressKey(Key.DirectionCenter)
+        }
+        compose.onNode(isDialog()).assertExists()
+    }
+
+    @Test fun closingQualityDialogRestoresNativeRemoteInput() {
+        show()
+        repeat(9) { compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) } }
+        compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+        compose.onNode(isDialog()).assertExists()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.waitForIdleSync()
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        compose.onNode(isDialog()).assertDoesNotExist()
+        instrumentation.waitForIdleSync()
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_CENTER)
+        compose.onNode(isDialog()).assertExists()
+        verify(exactly = 0) { viewModel.setAutoPlayNext(any()) }
+    }
+
+    @Test fun nativeDownAfterDialogDismissalMovesExactlyOneRow() {
+        show()
+        repeat(9) { compose.onRoot().performKeyInput { pressKey(Key.DirectionDown) } }
+        compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.waitForIdleSync()
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        compose.onNode(isDialog()).assertDoesNotExist()
+        instrumentation.waitForIdleSync()
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_DOWN)
+        compose.onRoot().performKeyInput { pressKey(Key.DirectionCenter) }
+        verify(exactly = 1) { viewModel.cycleFrameRateMatchingMode() }
     }
 
     @Test fun downThenSelectWithoutWaitingTargetsNextRow() {

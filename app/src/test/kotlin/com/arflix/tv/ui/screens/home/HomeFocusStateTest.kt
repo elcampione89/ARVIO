@@ -8,6 +8,43 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HomeFocusStateTest {
+    @Test fun returnToStartClearsEveryRowAndItsTitleAnchor() {
+        val rows = listOf(row(1, 2, 3).copy(id = "a"), row(4, 5, 6).copy(id = "b"))
+        val state = HomeFocusState().apply {
+            currentItemIndex = 2
+            recordSelection(rows)
+            currentRowIndex = 1
+            currentItemIndex = 1
+            recordSelection(rows)
+            isSidebarFocused = true
+        }
+        state.returnToStart(rows, 100)
+        assertEquals(0, state.currentRowIndex)
+        assertEquals(0, state.currentItemIndex)
+        assertEquals("a", state.preferredCategoryId)
+        assertEquals(mapOf("a" to 0), state.rowItemIndicesByCategoryId)
+        assertEquals(mapOf("a" to "MOVIE-1"), state.rowItemKeysByCategoryId)
+        assertFalse(state.isSidebarFocused)
+        assertFalse(state.isHeroFocused)
+        assertTrue(state.userHasNavigated)
+        assertEquals(100L, state.lastNavEventTime)
+        assertEquals(1, state.scrollResetRequest)
+    }
+
+    @Test fun returnToBillboardAndNewNavigationSurviveSavedState() {
+        val rows = listOf(row(1, 2, 3))
+        val state = HomeFocusState().apply { returnToStart(rows, 100, billboard = true) }
+        assertTrue(state.isHeroFocused)
+        state.isHeroFocused = false
+        state.currentItemIndex = 2
+        state.recordSelection(rows)
+        val saved = with(HomeFocusState.Saver) { SaverScope { true }.save(state)!! }
+        val restored = HomeFocusState.Saver.restore(saved)!!
+        restored.reconcile(rows)
+        assertEquals(2, restored.currentItemIndex)
+        assertEquals(1, restored.scrollResetRequest)
+    }
+
     @Test fun viewAllSurvivesPagingShrinkingAndSavedState() {
         val more = mapOf("row" to true)
         val initial = listOf(row(1, 2, 3))

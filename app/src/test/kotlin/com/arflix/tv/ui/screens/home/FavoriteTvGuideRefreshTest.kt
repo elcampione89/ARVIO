@@ -30,4 +30,24 @@ class FavoriteTvGuideRefreshTest {
         assertFalse(favoriteTvFocusRefreshDue(lastRefreshMs = 5, nowMs = 59_000, intervalMs = 60_000))
         assertTrue(favoriteTvFocusRefreshDue(lastRefreshMs = 5, nowMs = 60_005, intervalMs = 60_000))
     }
+
+    private val mine = com.arflix.tv.data.repository.IptvPlaylistEntry(id = "list_1", name = "Mine", m3uUrl = "https://a.test/list.m3u")
+    private val other = com.arflix.tv.data.repository.IptvPlaylistEntry(id = "list_2", name = "Other", m3uUrl = "https://b.test/list.m3u")
+
+    @Test fun switchingWhichPlaylistIsOnChangesTheFavoriteSourceKey() {
+        val before = com.arflix.tv.data.repository.IptvConfig(playlists = listOf(mine, other.copy(enabled = false)))
+        val after = com.arflix.tv.data.repository.IptvConfig(playlists = listOf(mine.copy(enabled = false), other))
+
+        assertNotEquals(iptvFavoriteSourceKey(before), iptvFavoriteSourceKey(after))
+    }
+
+    @Test fun unrelatedSettingsLeaveTheFavoriteSourceKeyAlone() {
+        val config = com.arflix.tv.data.repository.IptvConfig(playlists = listOf(mine, other.copy(enabled = false)))
+
+        assertEquals(iptvFavoriteSourceKey(config), iptvFavoriteSourceKey(config.copy(sortOrder = "name")))
+        assertEquals(
+            iptvFavoriteSourceKey(config),
+            iptvFavoriteSourceKey(config.copy(playlists = listOf(mine, other.copy(enabled = false, name = "Renamed")))),
+        )
+    }
 }

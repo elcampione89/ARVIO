@@ -54,6 +54,8 @@ captures/
 
 # Google Services (e.g. APIs or Firebase)
 google-services.json
+# Firebase client identifiers are public; no service-account credentials belong here.
+!app/google-services.json
 
 # Freeline
 freeline.py

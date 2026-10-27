@@ -89,6 +89,40 @@ interface MdbListApi {
         @Body body: MdbWatchlistModifyBody
     ): MdbCountResponse
 
+    // ===== The user's own lists =====
+
+    // no-cache: MDBList marks these public for 15 minutes, and a list the user just edited
+    // must not be answered from the app's HTTP cache (the picker's tick, the Library tab).
+    @GET("lists/user")
+    @Headers("Cache-Control: no-cache")
+    suspend fun getUserLists(
+        @Header("Authorization") authHeader: String? = null,
+        @Query("apikey") apiKey: String? = null
+    ): List<MdbUserList>
+
+    /** Raw JSON (live-checked: a flat array with `unified=true`), see MdbListRepository.listItems. */
+    @GET("lists/{listId}/items")
+    @Headers("Cache-Control: no-cache")
+    suspend fun getListItems(
+        @Path("listId") listId: Long,
+        @Header("Authorization") authHeader: String? = null,
+        @Query("apikey") apiKey: String? = null,
+        @Query("limit") limit: Int = 1000,
+        @Query("offset") offset: Int = 0,
+        @Query("unified") unified: String = "true"
+    ): com.google.gson.JsonElement
+
+    /** action = "add" | "remove". Static lists only; same flat tmdb refs as the watchlist. */
+    @POST("lists/{listId}/items/{action}")
+    @Headers("Content-Type: application/json")
+    suspend fun modifyList(
+        @Path("listId") listId: Long,
+        @Path("action") action: String,
+        @Header("Authorization") authHeader: String? = null,
+        @Query("apikey") apiKey: String? = null,
+        @Body body: MdbWatchlistModifyBody
+    ): MdbListModifyResponse
+
     // ===== Watched (Trakt-style ids objects) =====
 
     @GET("sync/watched")
@@ -230,6 +264,29 @@ data class MdbWatchlistModifyBody(
 )
 
 data class MdbTmdbRef(val tmdb: Int)
+
+/**
+ * Result of a list add/remove, per item (live-checked 2026-10-22). HTTP 200 does not mean the
+ * title changed: an unknown id comes back under `not_found`, an addition already in the list
+ * under `existing`, and a removal of a title the list does not hold also under `not_found`.
+ */
+data class MdbListModifyResponse(
+    val added: MdbCounts? = null,
+    val removed: MdbCounts? = null,
+    val existing: MdbCounts? = null,
+    @SerializedName("not_found") val notFound: MdbCounts? = null
+)
+
+/** One of the user's own lists. Dynamic (filter-based) lists cannot take items. */
+data class MdbUserList(
+    val id: Long = 0,
+    val name: String? = null,
+    val slug: String? = null,
+    val items: Int? = null,
+    val dynamic: Boolean? = null,
+    val mediatype: String? = null,
+    @SerializedName("user_name") val userName: String? = null
+)
 
 // ========== Watched ==========
 

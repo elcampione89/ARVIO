@@ -66,7 +66,9 @@ fun PinEntryDialog(
     onPinConfirmed: (String) -> Unit,
     onDismiss: () -> Unit,
     isSetup: Boolean = false,
-    pinError: String = ""
+    pinError: String = "",
+    // Setup only: the line under the title; null keeps the profile-lock wording.
+    setupHint: String? = null
 ) {
     var pinInput by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
@@ -157,7 +159,7 @@ fun PinEntryDialog(
 
                 Text(
                     text = when {
-                        isSetup && !isConfirmingSetup -> stringResource(R.string.set_profile_pin)
+                        isSetup && !isConfirmingSetup -> title
                         isSetup && isConfirmingSetup -> stringResource(R.string.profile_confirm_pin)
                         else -> title
                     },
@@ -169,7 +171,7 @@ fun PinEntryDialog(
 
                 Text(
                     text = when {
-                        isSetup && !isConfirmingSetup -> stringResource(R.string.profile_pin_setup_hint)
+                        isSetup && !isConfirmingSetup -> setupHint ?: stringResource(R.string.profile_pin_setup_hint)
                         isSetup && isConfirmingSetup -> stringResource(R.string.profile_pin_reenter)
                         else -> stringResource(R.string.enter_pin_to_unlock)
                     },

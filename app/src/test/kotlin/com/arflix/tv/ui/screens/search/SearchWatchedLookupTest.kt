@@ -53,7 +53,7 @@ class SearchWatchedLookupTest {
             history.get()
         }
         withContext(main) {
-            model = SearchViewModel(repository, trakt, mockk(relaxed = true))
+            model = SearchViewModel(repository, trakt, mockk(relaxed = true), mockk(relaxed = true))
             store.put("search", model)
         }
         withTimeout(5_000) { model.uiState.first { !it.isDiscoverLoading } }

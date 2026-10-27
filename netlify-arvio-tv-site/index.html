@@ -27,7 +27,7 @@
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ARVIO","applicationCategory":"MultimediaApplication","operatingSystem":"Android TV, Google TV, Android","url":"https://arvio.tv/","inLanguage":"en","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"downloadUrl":"https://play.google.com/store/apps/details?id=com.arvio.tv","codeRepository":"https://github.com/ProdigyV21/ARVIO","description":"Free, open-source Android TV media player for Jellyfin, Plex, Emby, IPTV and compatible addons. Get the ARVIO APK, connect your sources and track with Trakt or Simkl."}</script>
 
   <title>ARVIO — Free Android TV Media Player &amp; APK</title>
-  <link rel="stylesheet" href="/assets/home-v2.css?v=7">
+  <link rel="stylesheet" href="/assets/home-v2.css?v=9">
 <script defer src="/assets/premium-journey.js?v=2"></script>
 </head>
 <body>
@@ -50,33 +50,21 @@
       <p>Your libraries, live TV and discoveries.<br>One place that feels like yours.</p>
       <div class="actions"><a class="button white" href="https://github.com/ProdigyV21/ARVIO/releases/latest">Get the free APK <span aria-hidden="true">↗</span></a><a class="button mint-button" href="https://ko-fi.com/arvio/tiers" data-premium-placement="hero-membership"><span>Get Premium · $2.99/mo</span> <span aria-hidden="true">↗</span></a></div>
       <div class="hero-note"><span class="note-check" aria-hidden="true">✓</span> Free Android & TV app <span>·</span> Optional Premium</div>
-      <button class="button preview-button" id="play-preview" type="button"><span class="play-disc" aria-hidden="true">▶</span> See it in action</button>
+      <a class="button preview-button" href="#demo"><span class="play-disc" aria-hidden="true">▶</span> See it in action</a>
       <a class="hero-community-link" href="https://discord.gg/UavuEYMfQ4">Join us on Discord <span aria-hidden="true">↗</span></a>
       <p class="hero-premium-note">A monthly coffee for the developer. 24/7 hosted ARVIO Web for you.</p>
       <p class="hero-membership-terms">Monthly membership. Cancel anytime through Ko-fi.</p>
       <a class="hero-premium-details" href="/premium/" data-premium-placement="hero-details">See Premium benefits &amp; try it free <span aria-hidden="true">↗</span></a>
     </div>
-    <div class="stage" id="stage">
-      <div class="scene-header"><span><span class="dot"></span> THIS IS YOUR ARVIO</span><span id="scene-count">01 / 04</span></div>
-      <div class="scene-rig" id="scene-rig">
-        <div class="display-wrap"><div class="display" id="display"><div class="screen-stack"><img id="hero-screen" src="/assets/screenshots-v2/tv/01-home.webp" width="1920" height="1080" fetchpriority="high" alt="ARVIO 2.0 home screen on Android TV"></div><span class="device-dot" aria-hidden="true"></span></div></div>
-        <div class="screen-plinth" aria-hidden="true"></div>
-        <div class="scene-phone" aria-hidden="true"><img src="/assets/screenshots-v2/phone/01-home.webp" width="1080" height="2400" alt=""></div>
-        <div class="scene-chip"><span class="chip-symbol" aria-hidden="true">↗</span><div><strong>From the couch.<br>To wherever.</strong><span>TV · Phone · Tablet · Web</span></div></div>
+    <div class="stage hero-tour" id="demo" role="region" aria-label="ARVIO app tour">
+      <div class="scene-header"><span><span class="dot"></span> THE ARVIO TOUR</span><span>1:25</span></div>
+      <video id="promo-video" class="promo-video" width="1280" height="720" controls autoplay muted loop playsinline preload="none" poster="/assets/promo/arvio-tour-poster.jpg" data-src="/assets/promo/arvio-tour-720p.mp4" aria-label="ARVIO app tour" aria-describedby="demo-description"></video>
+      <div class="promo-caption">
+        <span id="demo-description">TV · Phone · Tablet · Web</span>
+        <a href="/assets/promo/arvio-tour-720p.mp4" download>Download video</a>
+        <button id="motion" class="motion" type="button" aria-pressed="false">Pause motion Ⅱ</button>
       </div>
-      <div class="scene-caption"><span id="scene-name">A home for everything you love.</span><span class="capture-label">REAL APP. REAL SCREENS.</span></div>
-      <p class="sr-only" id="screen-status" role="status"></p>
     </div>
-  </div>
-  <div class="hero-bottom">
-    <div class="chapter-intro"><span>TAKE A CLOSER LOOK</span><p>One app.<br>So many possibilities.</p></div>
-    <div class="chapter-dock" role="group" aria-label="Preview an ARVIO screen">
-      <button class="selected" type="button" data-screen="home" aria-pressed="true"><span class="chapter-image"><img src="/assets/screenshots-v2/tv/01-home.webp" alt="" width="1920" height="1080"></span><span class="chapter-text"><small>01</small><strong>Home</strong></span><span class="chapter-progress"></span></button>
-      <button type="button" data-screen="library" aria-pressed="false"><span class="chapter-image"><img src="/assets/screenshots-v2/tv/03-library.webp" alt="" width="1920" height="1080"></span><span class="chapter-text"><small>02</small><strong>Library</strong></span><span class="chapter-progress"></span></button>
-      <button type="button" data-screen="live" aria-pressed="false"><span class="chapter-image"><img src="/assets/screenshots-v2/tv/05-tv.webp" alt="" width="1920" height="1080"></span><span class="chapter-text"><small>03</small><strong>Live TV</strong></span><span class="chapter-progress"></span></button>
-      <button type="button" data-screen="sports" aria-pressed="false"><span class="chapter-image"><img src="/assets/screenshots-v2/tv/06-sports.webp" alt="" width="1920" height="1080"></span><span class="chapter-text"><small>04</small><strong>Sports</strong></span><span class="chapter-progress"></span></button>
-    </div>
-    <button id="motion" class="motion" type="button" aria-pressed="false">Pause motion Ⅱ</button>
   </div>
 </section>
 <section id="premium" class="section wrap">
@@ -109,6 +97,7 @@
 </main>
 <footer class="wrap"><div><a class="brand" href="#top"><img src="/assets/arvio-wordmark.png" width="134" height="34" alt="ARVIO"></a><p>Built with care. Kept going by you.</p></div><nav aria-label="Footer"><a href="/guides/" id="guide">Guides</a><a href="https://arvio-ui.web.app/">Dashboard</a><a href="https://auth.arvio.tv/">Account</a><a href="#screens">Screenshots</a><a href="/media-kit/">Media kit</a><a href="/credits/">Credits</a><a href="https://github.com/ProdigyV21/ARVIO">GitHub</a><a href="https://discord.gg/UavuEYMfQ4">Discord</a><a href="https://ko-fi.com/arvio/tiers">Support</a><a href="https://arvio.tv/privacy">Privacy</a></nav><nav aria-label="Language" class="language-links"><a href="/" lang="en" hreflang="en">English</a><a href="/es/" lang="es" hreflang="es">Español</a><a href="/pt-br/" lang="pt-BR" hreflang="pt-BR">Português</a></nav><small>Independent, open-source software. Media and third-party subscriptions are not included.<br>© ARVIO · Free & open source</small></footer>
 <script type="application/json" id="home-copy">{}</script>
-<script src="/assets/home-v2.js?v=2" defer></script>
+<script src="/assets/home-v2.js?v=4" defer></script>
+<script src="/assets/promo-video.js?v=2" defer></script>
 </body>
 </html>

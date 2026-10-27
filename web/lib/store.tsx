@@ -10,6 +10,7 @@ import { LanguageProvider } from "./i18n";
 import { shouldRefreshAutomatically } from "./automaticRefresh";
 import { getStreams, getStreamsProgressive, installAddon as installAddonManifest, loadLocalAddons, normalizeAddons, saveLocalAddons } from "./addons";
 import { isAddonNative } from "./addonNative";
+import { isYouTubeItem } from "./youtubeCollection";
 import { AuthClient, SESSION_KEY, decodeJwtPayload } from "./auth";
 import { config, getAuthPortalUrl, isDisabledTelegramSource, TELEGRAM_DISABLED_MESSAGE } from "./config";
 import { defaultCatalogs, mergeCatalogs } from "./catalogs";
@@ -185,7 +186,8 @@ function makeProfile(name: string, avatarColor: number, avatarId = 0): Profile {
     pin: null,
     isLocked: false,
     createdAt: now,
-    lastUsedAt: now
+    lastUsedAt: now,
+    updatedAt: now
   };
 }
 
@@ -1060,7 +1062,7 @@ export function AppProvider({
         // Only Trakt has a hidden-from-progress concept; MDBList reads return an
         // empty set so the filters below are no-ops for it.
         readsFrom("continueWatching", "trakt")
-          ? traktClient.hiddenProgressShowIds().catch(() => new Set<number>())
+          ? traktClient.hiddenProgressShowIds().catch(() => { failedRead("cw-hidden"); return new Set<number>(); })
           : Promise.resolve(new Set<number>()),
         cwMoviesRead,
         cwShowsRead
@@ -1173,7 +1175,7 @@ export function AppProvider({
       // empty, the calls were blocked (Cloudflare challenges the CORS
       // preflight intermittently, especially on VPN/datacenter IPs) — keep
       // showing the cached rail instead of wiping it with an empty list.
-      const traktOutage = readFailures.has("playback") || readFailures.has("cw-watched") || readFailures.has("cw-movies") || readFailures.has("cw-shows");
+      const traktOutage = readFailures.has("playback") || readFailures.has("cw-watched") || readFailures.has("cw-movies") || readFailures.has("cw-shows") || readFailures.has("cw-hidden");
       if (!traktOutage && upNext.fetchFailures === 0 && episodeLookupFailures === 0 && isCurrent() && activitySignature) {
         traktActivityRef.current = { key: `${accountId ?? "local"}:${profileId}`, signature: activitySignature };
       }
@@ -1738,7 +1740,7 @@ export function AppProvider({
     setStreams([]);
     const priorityConfig = getPriorityConfig(settingsRef.current);
     // Native addon items keep their own (negative) id; their details come from the addon.
-    const resolvedId = item.id > 0 || isAddonNative(item) ? item.id : await resolveTmdbId(item).catch(() => null);
+    const resolvedId = item.id > 0 || isAddonNative(item) || isYouTubeItem(item) ? item.id : await resolveTmdbId(item).catch(() => null);
     if (sourceGeneration.current !== generation) return;
     if (!resolvedId && !item.isHomeServer) { setBusy(""); setToast("Metadata could not be matched for this title."); return; }
     const detailsTarget = item.isHomeServer && item.tmdbId ? { ...item, id: item.tmdbId } : { ...item, id: resolvedId ?? item.id };
@@ -1840,7 +1842,7 @@ export function AppProvider({
     // + save progress when the user returns. forceBrowser overrides (e.g. the
     // in-player source panel, which is already in the browser player).
     const preferredPlayer = settingsRef.current.defaultPlayer;
-    if (!stream.autoSelect && !options.forceBrowser && !options.forceRemux && !options.forceTranscode && (preferredPlayer === "vlc" || preferredPlayer === "infuse")) {
+    if (stream.addonId !== "arvio_youtube" && !stream.autoSelect && !options.forceBrowser && !options.forceRemux && !options.forceTranscode && (preferredPlayer === "vlc" || preferredPlayer === "infuse")) {
       const externalItem = selected;
       const externalTitle = selected?.title ?? stream.source ?? "ARVIO stream";
       const preferredSub = settingsRef.current.defaultSubtitle;
@@ -2614,16 +2616,24 @@ export function AppProvider({
     return hydrateTraktItems(dedupeMedia(rows.map(traktItemToMedia)));
   }, [fetchTraktListItems]);
 
-  const persistProfiles = useCallback((next: Profile[], activeId: string | null) => {
+  // The cloud save merges into the account's list (saveCloudProfiles), so a list cached
+  // in this browser can no longer delete profiles; only [deletedIds] remove one.
+  const persistProfiles = useCallback((next: Profile[], activeId: string | null, deletedIds: string[] = []) => {
     activeProfileIdRef.current = activeId;
     setProfiles(next);
     setActiveProfileId(activeId);
     saveStored(PROFILES_KEY, next);
     saveStored(ACTIVE_PROFILE_KEY, activeId);
-    void saveCloudProfiles(authClient, next, activeId).catch(() => undefined);
+    void saveCloudProfiles(authClient, next, activeId, deletedIds).catch(() => undefined);
   }, []);
 
   const selectProfile = useCallback(async (profile: Profile, pin?: string) => {
+    // Until the account's profiles arrive, this browser shows the list it cached on its last
+    // visit; picking from it would act on a list that may be out of date.
+    if (authClient.session && !cloudProfilesHydrated) {
+      setToast("Loading your profiles, try again in a moment.");
+      return;
+    }
     if (profile.isLocked && profile.pin && !await verifyProfilePin(pin ?? "", profile.pin)) {
       setToast("Unlock this profile with its PIN.");
       return;
@@ -2655,7 +2665,7 @@ export function AppProvider({
     setView("app");
     setSection("home");
     void refreshData(profile.id);
-  }, [profiles, activeProfileId, persistProfiles, refreshData]);
+  }, [profiles, activeProfileId, persistProfiles, refreshData, cloudProfilesHydrated]);
 
   const createProfile = useCallback(async (name: string, avatarColor: number, avatarId: number) => {
     const profile = makeProfile(name || "Profile", avatarColor || randomProfileColor(), avatarId);
@@ -2663,12 +2673,13 @@ export function AppProvider({
   }, [profiles, activeProfileId, persistProfiles]);
 
   const updateProfileAction = useCallback(async (profile: Profile) => {
-    persistProfiles(profiles.map((p) => (p.id === profile.id ? profile : p)), activeProfileId);
+    const edited = { ...profile, updatedAt: Date.now() };
+    persistProfiles(profiles.map((p) => (p.id === profile.id ? edited : p)), activeProfileId);
   }, [profiles, activeProfileId, persistProfiles]);
 
   const deleteProfileAction = useCallback(async (id: string) => {
     const next = profiles.filter((p) => p.id !== id);
-    persistProfiles(next, activeProfileId === id ? null : activeProfileId);
+    persistProfiles(next, activeProfileId === id ? null : activeProfileId, [id]);
   }, [profiles, activeProfileId, persistProfiles]);
 
   const switchProfile = useCallback(() => {

@@ -136,29 +136,22 @@ class SourceScrollingDeviceTest {
         screenshot.recycle()
     }
 
-    @Test fun arrivingSourcesDoNotReplaceTheFocusedSource() {
-        val original = (0..20).map { source(it) }
-        val streams = mutableStateOf(original)
-        var focused: StreamSource? = null
-        var selected: StreamSource? = null
-        show { StreamSelector(true, streams.value, null, onFocusedStream = { focused = it }, onSelect = { selected = it }) }
-        repeat(6) { key(KeyEvent.KEYCODE_DPAD_DOWN) }
-        compose.runOnIdle { streams.value = listOf(source(100), source(101)) + original }
-        compose.waitForIdle()
-        compose.runOnIdle { assertEquals("New results stole focus", original[6], focused) }
-        compose.onNodeWithText(original[6].source).assertIsDisplayed()
-        key(KeyEvent.KEYCODE_DPAD_CENTER)
-        compose.runOnIdle { assertEquals(original[6], selected) }
-    }
-
-    @Test fun firstSourceKeepsFocusWhileMoreResultsArrive() {
-        val original = (0..20).map { source(it) }
-        val streams = mutableStateOf(original)
+    @Test fun focusStaysOnTheTopRowWhileResultsArrive() {
+        // The picker often opens with only a trailing action row ("Search Telegram"); results then
+        // arrive above it. Focus is a row position, so it stays at the top instead of riding the
+        // action row down to the bottom of the list.
+        val actionRow = source(999, extra = "action")
+        val streams = mutableStateOf(listOf(actionRow))
         var focused: StreamSource? = null
         show { StreamSelector(true, streams.value, null, onFocusedStream = { focused = it }) }
-        compose.runOnIdle { streams.value = listOf(source(100), source(101)) + original }
-        compose.runOnIdle { assertEquals(original[0], focused) }
-        compose.onNodeWithText(original[0].source).assertIsDisplayed()
+        val arrived = (0..20).map { source(it) }
+        compose.runOnIdle { streams.value = arrived + actionRow }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("Focus left the top row", arrived[0], focused) }
+        compose.onNodeWithText(arrived[0].source).assertIsDisplayed()
+        compose.runOnIdle { streams.value = listOf(source(100), source(101)) + arrived + actionRow }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("Focus left the top row", source(100), focused) }
     }
 
     @Test fun reopeningThePickerResetsFocusToTheFirstSource() {

@@ -42,10 +42,19 @@ fun CategoryViewAllScreen(
     onNavigateToDetails: (MediaType, Int) -> Unit,
     onBack: () -> Unit
 ) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val rawUiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val kidsFilterState by viewModel.kidsFilterState.collectAsStateWithLifecycle()
+    val uiState = remember(rawUiState, kidsFilterState) {
+        viewModel.applyKidsFilter(rawUiState, kidsFilterState)
+    }
     val category = uiState.categories.firstOrNull { it.id == categoryId }
     val items = remember(category?.items) { category?.items?.filterNot { it.isPlaceholder }.orEmpty() }
     val hasMore = uiState.categoryHasMoreMap[categoryId] != false
+    // Kids profile: a page that mostly or fully fails the age filter must not end the grid.
+    val rawItemCount = rawUiState.categories.firstOrNull { it.id == categoryId }?.items?.size ?: 0
+    LaunchedEffect(categoryId, items.size, rawItemCount, kidsFilterState.ages.size) {
+        viewModel.topUpKidsCategory(categoryId)
+    }
     val usePosterCards = rememberCatalogueRowLayoutMode("home:$categoryId") == CardLayoutMode.POSTER
     var focusedPreview by remember(categoryId) { mutableStateOf<MediaItem?>(null) }
     var enrichedPreview by remember(categoryId) { mutableStateOf<MediaItem?>(null) }

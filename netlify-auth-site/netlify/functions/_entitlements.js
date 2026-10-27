@@ -10,14 +10,16 @@
 //     tier: string | null,
 //     startedAt: ISO string,
 //     expiresAt: ISO string | null,   // null = lifetime
-//     trialUsed: boolean,             // a one-time 3-day trial was consumed
+//     trialUsed: boolean,             // retained historical trial marker
 //     lastEvent: string | null,
 //     updatedAt: ISO string
 //   }
 const { connectLambda, getStore } = require("@netlify/blobs");
 
-const TRIAL_DAYS = 3;
-const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
+// Hosted Web is paid-only. These legacy response fields stay explicit so old
+// clients cannot interpret a missing value as an available three-day trial.
+const TRIAL_DAYS = 0;
+const TRIAL_MS = 0;
 
 function entitlementsStore(event) {
   connectLambda(event);
@@ -52,19 +54,22 @@ async function writeEntitlement(store, emailHash, record) {
 function evaluateEntitlement(record) {
   const now = Date.now();
   if (!record) {
-    return { entitled: false, reason: "none", status: "none", trialAvailable: true, trialDurationDays: TRIAL_DAYS, expiresAt: null, source: null };
+    return { entitled: false, reason: "none", status: "none", trialAvailable: false, trialDurationDays: TRIAL_DAYS, expiresAt: null, source: null };
   }
   const expiresAt = record.expiresAt ? Date.parse(record.expiresAt) : null;
-  const active =
+  // Keep legacy trial records for account history, but never let one unlock
+  // hosted Web, including a trial whose old deadline is still in the future.
+  const historicalTrial = record.source === "trial";
+  const active = !historicalTrial &&
     record.status === "active" && (expiresAt === null || expiresAt > now);
   return {
     entitled: active,
-    reason: active ? (record.source === "trial" ? "trial" : "subscription") : "expired",
-    status: record.status || "none",
+    reason: active ? "subscription" : historicalTrial ? "none" : "expired",
+    status: historicalTrial ? "expired" : record.status || "none",
     source: record.source || null,
     tier: record.tier || null,
     expiresAt: record.expiresAt || null,
-    trialAvailable: !record.trialUsed && !active,
+    trialAvailable: false,
     trialDurationDays: TRIAL_DAYS,
     updatedAt: record.updatedAt || null
   };

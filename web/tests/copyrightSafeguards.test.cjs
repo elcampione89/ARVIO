@@ -33,9 +33,14 @@ test('Android has no direct YouTube extraction implementation', () => {
 
 test('web YouTube player uses an unmodified embed with a separate toolbar', () => {
   const source = read('web/components/player/PlayerOverlay.tsx');
-  assert.match(source, /youtube-nocookie\.com\/embed/);
+  const embed = read('web/components/player/YouTubeEmbed.tsx');
+  const api = read('web/lib/youtubePlayback.ts');
+  assert.match(api, /youtube-nocookie\.com\/embed/);
   assert.match(source, /youtube-player-toolbar/);
-  assert.match(source, /referrerPolicy="strict-origin-when-cross-origin"/);
+  assert.match(embed, /referrerPolicy = "strict-origin-when-cross-origin"/);
+  assert.match(embed, /createElement\("iframe"\)/);
+  assert.match(embed, /allowFullscreen = true/);
+  assert.match(api, /www\.youtube\.com\/iframe_api/);
   const css = read('web/app/globals.css');
   assert.match(css, /youtube-player-layout[^}]+grid-template-rows: auto minmax\(200px, 1fr\)/);
 });

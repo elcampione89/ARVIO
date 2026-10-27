@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.arflix.tv.data.model.MediaItem
 import com.arflix.tv.data.model.MediaType
 import com.arflix.tv.data.model.Category
+import com.arflix.tv.data.repository.KidsContentFilter
 import com.arflix.tv.data.repository.MediaRepository
 import com.arflix.tv.data.repository.MediaSearchResults
 import com.arflix.tv.data.repository.PersonMediaSearchResult
@@ -159,8 +160,25 @@ data class SearchUiState(
 class SearchViewModel @Inject constructor(
     private val mediaRepository: MediaRepository,
     private val traktRepository: TraktRepository,
-    private val recentSearchRepository: RecentSearchRepository
+    private val recentSearchRepository: RecentSearchRepository,
+    private val kidsContentFilter: KidsContentFilter
 ) : ViewModel() {
+
+    val kidsFilterState: StateFlow<KidsContentFilter.State> = kidsContentFilter.state
+
+    /** Results as a kids profile may see them; any other profile gets [state] unchanged. */
+    fun applyKidsFilter(state: SearchUiState, kids: KidsContentFilter.State): SearchUiState {
+        if (!kids.isActive) return state
+        return state.copy(
+            results = kidsContentFilter.filter(state.results, kids),
+            movieResults = kidsContentFilter.filter(state.movieResults, kids),
+            tvResults = kidsContentFilter.filter(state.tvResults, kids),
+            personResults = kidsContentFilter.filterCategories(state.personResults, kids),
+            discoverCategories = kidsContentFilter.filterCategories(state.discoverCategories, kids),
+            discoverGridItems = kidsContentFilter.filter(state.discoverGridItems, kids),
+            aiResults = kidsContentFilter.filter(state.aiResults, kids)
+        )
+    }
 
     private val _uiState = MutableStateFlow(SearchUiState())
     val uiState: StateFlow<SearchUiState> = _uiState.asStateFlow()

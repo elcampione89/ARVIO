@@ -445,6 +445,10 @@ fun ProfileSelectionScreen(
                 useCustomAvatarImage = uiState.useCustomAvatarImage,
                 onAvatarImageSelected = { viewModel.setSelectedAvatarImage(it) },
                 onRemoveAvatarImage = { viewModel.removeSelectedAvatarImage() },
+                isKidsProfile = uiState.isKidsProfile,
+                onKidsProfileChange = viewModel::setKidsProfile,
+                kidsAgeLevel = uiState.kidsAgeLevel,
+                onKidsAgeLevelChange = viewModel::setKidsAgeLevel,
                 onConfirm = { viewModel.createProfile() },
                 onDismiss = { viewModel.hideAddDialog() }
             )
@@ -464,6 +468,10 @@ fun ProfileSelectionScreen(
                 useCustomAvatarImage = uiState.useCustomAvatarImage,
                 onAvatarImageSelected = { viewModel.setSelectedAvatarImage(it) },
                 onRemoveAvatarImage = { viewModel.removeSelectedAvatarImage() },
+                isKidsProfile = uiState.isKidsProfile,
+                onKidsProfileChange = viewModel::setKidsProfile,
+                kidsAgeLevel = uiState.kidsAgeLevel,
+                onKidsAgeLevelChange = viewModel::setKidsAgeLevel,
                 onConfirm = { viewModel.updateProfile() },
                 onDelete = { viewModel.deleteProfile(profile); viewModel.hideEditDialog() },
                 onDismiss = { viewModel.hideEditDialog() },
@@ -483,8 +491,9 @@ fun ProfileSelectionScreen(
         // PIN Entry Dialog
         if (uiState.showPinDialog) {
             if (uiState.pinDialogMode == "verify") {
+                val isParentPin = uiState.pinContext.startsWith(ProfileViewModel.PIN_CONTEXT_PARENT_PREFIX)
                 PinEntryDialog(
-                    title = stringResource(R.string.enter_pin_to_unlock),
+                    title = stringResource(if (isParentPin) R.string.profile_parent_pin_enter else R.string.enter_pin_to_unlock),
                     onPinConfirmed = { pin ->
                         val pending = uiState.pendingProfileForPin
                         if (pending != null && PinUtil.verifyPin(pin, pending.pin) && uiState.pinContext == "select") {
@@ -497,9 +506,13 @@ fun ProfileSelectionScreen(
                     pinError = uiState.pinError
                 )
             } else if (uiState.pinDialogMode == "setup") {
+                val isParentPin = uiState.pinContext.startsWith(ProfileViewModel.PIN_CONTEXT_PARENT_PREFIX)
                 PinEntryDialog(
-                    title = stringResource(R.string.set_profile_pin),
-                    onPinConfirmed = { pin -> viewModel.setupProfilePin(pin) },
+                    title = stringResource(if (isParentPin) R.string.profile_parent_pin_set else R.string.set_profile_pin),
+                    onPinConfirmed = { pin ->
+                        if (isParentPin) viewModel.setupParentPin(pin) else viewModel.setupProfilePin(pin)
+                    },
+                    setupHint = if (isParentPin) stringResource(R.string.profile_parent_pin_hint) else null,
                     onDismiss = { viewModel.hidePinDialog() },
                     isSetup = true
                 )
@@ -613,6 +626,19 @@ private fun ProfileAvatar(
             textAlign = TextAlign.Center
         )
 
+        if (profile.isKidsProfile) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.profile_kids_badge),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF3B82F6))
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+        }
     }
 }
 

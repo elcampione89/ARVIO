@@ -53,4 +53,19 @@ class LiveTvRetryPolicyTest {
             assertFalse(isMissingPlaybackResource(status))
         }
     }
+
+    @Test fun stalledBufferingIsRecognisedThroughThePlayerError() {
+        val stuck = androidx.media3.common.util.StuckPlayerException(
+            androidx.media3.common.util.StuckPlayerException.STUCK_BUFFERING_NO_PROGRESS, LIVE_STUCK_BUFFERING_TIMEOUT_MS,
+        )
+        assertTrue(RuntimeException("playback failed", stuck).isStuckBuffering())
+    }
+
+    @Test fun loadErrorsAndOtherStuckKindsAreNotStalls() {
+        assertFalse(RuntimeException("HTTP 500").isStuckBuffering())
+        val stuckPlaying = androidx.media3.common.util.StuckPlayerException(
+            androidx.media3.common.util.StuckPlayerException.STUCK_PLAYING_NOT_ENDING, 60_000,
+        )
+        assertFalse(stuckPlaying.isStuckBuffering())
+    }
 }

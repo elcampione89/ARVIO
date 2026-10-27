@@ -74,6 +74,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.arflix.tv.R
+import com.arflix.tv.data.model.KidsAgeLevel
 import com.arflix.tv.data.model.Profile
 import com.arflix.tv.data.model.ProfileColors
 import com.arflix.tv.ui.components.AvatarIcon
@@ -101,6 +102,10 @@ fun AddProfileDialog(
     useCustomAvatarImage: Boolean = false,
     onAvatarImageSelected: (String) -> Unit = {},
     onRemoveAvatarImage: () -> Unit = {},
+    isKidsProfile: Boolean = false,
+    onKidsProfileChange: (Boolean) -> Unit = {},
+    kidsAgeLevel: KidsAgeLevel = KidsAgeLevel.DEFAULT,
+    onKidsAgeLevelChange: (KidsAgeLevel) -> Unit = {},
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -117,6 +122,10 @@ fun AddProfileDialog(
         useCustomAvatarImage = useCustomAvatarImage,
         onAvatarImageSelected = onAvatarImageSelected,
         onRemoveAvatarImage = onRemoveAvatarImage,
+        isKidsProfile = isKidsProfile,
+        onKidsProfileChange = onKidsProfileChange,
+        kidsAgeLevel = kidsAgeLevel,
+        onKidsAgeLevelChange = onKidsAgeLevelChange,
         confirmLabel = stringResource(R.string.confirm),
         onConfirm = onConfirm,
         onDismiss = onDismiss,
@@ -142,6 +151,10 @@ fun EditProfileDialog(
     useCustomAvatarImage: Boolean = false,
     onAvatarImageSelected: (String) -> Unit = {},
     onRemoveAvatarImage: () -> Unit = {},
+    isKidsProfile: Boolean = false,
+    onKidsProfileChange: (Boolean) -> Unit = {},
+    kidsAgeLevel: KidsAgeLevel = KidsAgeLevel.DEFAULT,
+    onKidsAgeLevelChange: (KidsAgeLevel) -> Unit = {},
     onConfirm: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -161,6 +174,10 @@ fun EditProfileDialog(
         useCustomAvatarImage = useCustomAvatarImage,
         onAvatarImageSelected = onAvatarImageSelected,
         onRemoveAvatarImage = onRemoveAvatarImage,
+        isKidsProfile = isKidsProfile,
+        onKidsProfileChange = onKidsProfileChange,
+        kidsAgeLevel = kidsAgeLevel,
+        onKidsAgeLevelChange = onKidsAgeLevelChange,
         confirmLabel = stringResource(R.string.save),
         onConfirm = onConfirm,
         onDismiss = onDismiss,
@@ -190,6 +207,10 @@ private fun ProfileDialogContent(
     useCustomAvatarImage: Boolean,
     onAvatarImageSelected: (String) -> Unit,
     onRemoveAvatarImage: () -> Unit,
+    isKidsProfile: Boolean,
+    onKidsProfileChange: (Boolean) -> Unit,
+    kidsAgeLevel: KidsAgeLevel,
+    onKidsAgeLevelChange: (KidsAgeLevel) -> Unit,
     confirmLabel: String,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
@@ -381,6 +402,17 @@ private fun ProfileDialogContent(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
+                    KidsProfileControls(
+                        isKidsProfile = isKidsProfile,
+                        onKidsProfileChange = {
+                            hideKeyboard()
+                            onKidsProfileChange(it)
+                        },
+                        kidsAgeLevel = kidsAgeLevel,
+                        onKidsAgeLevelChange = onKidsAgeLevelChange
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     if (profile != null && onShowPinSetup != null && onRemovePin != null) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -529,8 +561,12 @@ private fun ProfileDialogContent(
                     horizontalArrangement = Arrangement.spacedBy(28.dp)
                 ) {
                     // ---- Left column: preview + name + buttons ----
+                    // Scrolls: with the kids controls the column outgrows a 1080p screen, and
+                    // D-pad focus brings the buttons at its bottom into view.
                     Column(
-                        modifier = Modifier.width(200.dp),
+                        modifier = Modifier
+                            .width(200.dp)
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
@@ -626,6 +662,17 @@ private fun ProfileDialogContent(
                         }
 
                         Spacer(modifier = Modifier.height(20.dp))
+
+                        KidsProfileControls(
+                            isKidsProfile = isKidsProfile,
+                            onKidsProfileChange = {
+                                hideKeyboard()
+                                onKidsProfileChange(it)
+                            },
+                            kidsAgeLevel = kidsAgeLevel,
+                            onKidsAgeLevelChange = onKidsAgeLevelChange
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         // PIN Controls (edit mode only)
                         if (profile != null && onShowPinSetup != null && onRemovePin != null) {
@@ -846,6 +893,78 @@ private fun ProfileAvatarPreview(
             )
         }
     }
+}
+
+/** Kids switch plus, while it is on, the age cap. Same look as the PIN row. */
+@Composable
+private fun KidsProfileControls(
+    isKidsProfile: Boolean,
+    onKidsProfileChange: (Boolean) -> Unit,
+    kidsAgeLevel: KidsAgeLevel,
+    onKidsAgeLevelChange: (KidsAgeLevel) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.profile_kids),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFFB0B0B0),
+                modifier = Modifier.weight(1f).padding(start = 4.dp)
+            )
+            DialogButton(
+                text = stringResource(if (isKidsProfile) R.string.profile_kids_on else R.string.profile_kids_off),
+                isPrimary = isKidsProfile,
+                icon = if (isKidsProfile) Icons.Default.Check else null,
+                onClick = { onKidsProfileChange(!isKidsProfile) },
+                modifier = Modifier.width(88.dp)
+            )
+        }
+        if (isKidsProfile) {
+            // One button that cycles through the levels: three side by side do not fit
+            // the 200dp column of the TV layout.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.profile_kids_max_age),
+                    fontSize = 12.sp,
+                    color = Color(0xFFB0B0B0),
+                    modifier = Modifier.weight(1f).padding(start = 4.dp)
+                )
+                DialogButton(
+                    text = stringResource(kidsAgeLevelLabel(kidsAgeLevel)),
+                    isPrimary = false,
+                    onClick = {
+                        val levels = KidsAgeLevel.entries
+                        onKidsAgeLevelChange(levels[(kidsAgeLevel.ordinal + 1) % levels.size])
+                    },
+                    modifier = Modifier.width(88.dp)
+                )
+            }
+            Text(
+                text = stringResource(R.string.profile_kids_hint),
+                fontSize = 11.sp,
+                color = Color.White.copy(alpha = 0.5f),
+                modifier = Modifier.padding(start = 4.dp)
+            )
+        }
+    }
+}
+
+private fun kidsAgeLevelLabel(level: KidsAgeLevel): Int = when (level) {
+    KidsAgeLevel.LITTLE_KIDS -> R.string.profile_kids_little
+    KidsAgeLevel.OLDER_KIDS -> R.string.profile_kids_older
+    KidsAgeLevel.TEENS -> R.string.profile_kids_teens
 }
 
 @Composable

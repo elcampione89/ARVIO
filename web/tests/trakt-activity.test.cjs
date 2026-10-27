@@ -76,6 +76,34 @@ function clientHarness(fetch) {
   return { client, proxyCalls: () => proxy };
 }
 
+test('hidden progress uses current dropped endpoint and paginates both sections', async () => {
+  const { TraktClient } = load('lib/trakt.ts', { './config': { config: {} }, './http': {}, './storage': storage() });
+  const client = new TraktClient();
+  client.refreshIfNeeded = async () => ({ access_token: 'fixture' });
+  const requests = [];
+  client.trakt = async (path) => {
+    requests.push(path);
+    assert.ok(!path.includes('progress_watched_reset'));
+    const url = new URL(path, 'https://example.invalid');
+    if (url.pathname.endsWith('/dropped')) return [{ show: { ids: { trakt: 500 } } }];
+    return url.searchParams.get('page') === '1'
+      ? Array.from({ length: 100 }, (_, i) => ({ show: { ids: { trakt: i + 1 } } }))
+      : [{ show: { ids: { trakt: 101 } } }];
+  };
+  const hidden = await client.hiddenProgressShowIds();
+  assert.equal(hidden.size, 102);
+  assert.ok(hidden.has(500) && hidden.has(101));
+  assert.equal(requests.length, 3);
+});
+
+test('hidden-list outage is not misreported as an authoritative empty list', async () => {
+  const { TraktClient } = load('lib/trakt.ts', { './config': { config: {} }, './http': {}, './storage': storage() });
+  const client = new TraktClient();
+  client.refreshIfNeeded = async () => ({ access_token: 'fixture' });
+  client.trakt = async () => { throw Error('offline'); };
+  await assert.rejects(client.hiddenProgressShowIds(), /offline/);
+});
+
 test('background activity request goes directly to Trakt, never through Netlify even on a 403', async () => {
   const urls = [];
   const h = clientHarness(async (url, init) => {

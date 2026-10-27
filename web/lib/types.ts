@@ -136,7 +136,9 @@ export type CatalogSourceType =
   | "simkl"
   | "addon"
   | "home-server"
-  | "template";
+  | "template"
+  // The profile's own YouTube row (see youtubeCollection.ts).
+  | "youtube";
 
 export interface CatalogConfig {
   id: string;
@@ -307,6 +309,8 @@ export interface Profile {
   isLocked?: boolean;
   createdAt?: number;
   lastUsedAt?: number;
+  // Last edit of the profile itself (not a selection); the cloud merge keeps the newer copy.
+  updatedAt?: number;
 }
 
 export interface UserProfile {
@@ -318,6 +322,8 @@ export interface UserProfile {
 }
 
 export interface WatchHistoryEntry {
+  addon_native_id?: string | null;
+  addon_native_addon_id?: string | null;
   id?: string | null;
   user_id: string;
   profile_id?: string | null;

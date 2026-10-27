@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.*
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.gestures.animateScrollBy
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -27,13 +29,16 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.LayoutDirection
 import com.arflix.tv.ui.focus.mirrorHorizontalForRtl
+import com.arflix.tv.ui.focus.arvioDpadFocusGroup
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
@@ -54,14 +59,23 @@ import com.arflix.tv.ui.skin.resolveAccentColor
 import com.arflix.tv.util.LocalDeviceType
 import com.arflix.tv.util.tr
 import com.arflix.tv.ui.screens.watchlist.calendar.*
+import com.arflix.tv.ui.screens.collections.CollectionBackdrop
+import com.arflix.tv.ui.screens.collections.CollectionSpotlight
+import com.arflix.tv.ui.screens.collections.collectionSpotlightHeight
+import kotlinx.coroutines.delay
 import java.time.LocalDate
 
 internal enum class LibrarySection(val label: String) { WATCHLISTS("Watchlists"), LISTS("My lists"), SERVERS("Homeserver"), CALENDAR("Calendar") }
 internal val LibraryTabsTopInset = AppTopBarHeight - 8.dp
+@OptIn(ExperimentalFoundationApi::class)
+private object LibraryTvBringIntoViewSpec : BringIntoViewSpec {
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = 0f
+}
 internal fun libraryColumns(width: Int, poster: Boolean, collections: Boolean = false): Int =
     if (collections) (width / 270).coerceIn(1, 3) else if (poster) (width / 115).coerceIn(2, 8) else (width / 180).coerceIn(2, 4)
 internal fun WatchlistSourceItem.isPersonalCollection(): Boolean = this is WatchlistSourceItem.Catalog ||
-    (this is WatchlistSourceItem.TrackerList && provider == TrackerLibraryProvider.TRAKT && listKey !in setOf("__watchlist__", "watchlist", "collection", "watched"))
+    (this is WatchlistSourceItem.TrackerList && (provider == TrackerLibraryProvider.MDBLIST ||
+        (provider == TrackerLibraryProvider.TRAKT && listKey !in setOf("__watchlist__", "watchlist", "collection", "watched"))))
 internal fun librarySources(sources: List<WatchlistSourceItem>, section: LibrarySection): List<WatchlistSourceItem> =
     sources.filter { when (section) {
         LibrarySection.WATCHLISTS -> it is WatchlistSourceItem.MyWatchlist || (it is WatchlistSourceItem.TrackerList && !it.isPersonalCollection())
@@ -87,8 +101,12 @@ fun WatchlistScreen(
     calendarViewModel: ReleaseCalendarViewModel? = null,
     onCalendarOpenRelease: ((com.arflix.tv.data.model.CalendarRelease) -> Unit)? = null
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val servers by viewModel.libraryState.collectAsStateWithLifecycle()
+    val rawState by viewModel.uiState.collectAsStateWithLifecycle()
+    val rawServers by viewModel.libraryState.collectAsStateWithLifecycle()
+    val kidsFilterState by viewModel.kidsFilterState.collectAsStateWithLifecycle()
+    // A kids profile sees its lists age-filtered; any other profile gets them unchanged.
+    val state = remember(rawState, kidsFilterState) { viewModel.applyKidsFilter(rawState, kidsFilterState) }
+    val servers = remember(rawServers, kidsFilterState) { viewModel.applyKidsFilter(rawServers, kidsFilterState) }
     val logos by viewModel.logoUrls.collectAsStateWithLifecycle()
     val touch = LocalDeviceType.current.isTouchDevice()
     val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
@@ -131,6 +149,56 @@ fun WatchlistScreen(
         restore = { saved -> saved.mapValues { (_, value) -> val position = value as List<*>; LazyGridState(position[0] as Int, position[1] as Int) }.toMutableMap() }
     )) { mutableMapOf<String, LazyGridState>() }
     val grid = remember(sourceKey) { viewports.getOrPut(sourceKey) { LazyGridState() } }
+    var revealJob by remember(grid) { mutableStateOf<Job?>(null) }
+    var focusedGridRow by remember(grid) { mutableStateOf<Pair<Int, Int>?>(null) }
+    DisposableEffect(grid) {
+        onDispose { revealJob?.cancel() }
+    }
+    fun revealCard(index: Int, columns: Int) {
+        if (touch) return
+        val row = columns to index / columns
+        // Sideways focus must not cancel or restart the current row's reveal.
+        if (focusedGridRow == row) return
+        focusedGridRow = row
+        revealJob?.cancel()
+        revealJob = scrollScope.launch {
+            withFrameNanos { }
+            val layout = grid.layoutInfo
+            val card = layout.visibleItemsInfo.firstOrNull { it.index == index }
+            if (card == null) grid.animateScrollToItem(index / columns * columns) else {
+                val delta = libraryRowAnchorScrollDelta(card.offset.y, card.size.height,
+                    layout.viewportStartOffset + layout.beforeContentPadding,
+                    layout.viewportEndOffset - layout.afterContentPadding)
+                if (delta != 0) grid.animateScrollBy(delta.toFloat(), tween(160))
+            }
+        }
+    }
+    var focusedPreviewKey by rememberSaveable(currentProfile?.id, sourceKey) { mutableStateOf<String?>(null) }
+    val touchPreviewIndex by remember(grid) { derivedStateOf { grid.firstVisibleItemIndex } }
+    val previewCandidate = if (touch) items.getOrNull(touchPreviewIndex.coerceAtMost(items.lastIndex.coerceAtLeast(0)))
+        else items.firstOrNull { libraryPreviewKey(it) == focusedPreviewKey } ?: items.firstOrNull()
+    var readyPreview by remember(currentProfile?.id, sourceKey) { mutableStateOf<LibraryPreview?>(null) }
+    val activePreview = readyPreview ?: previewCandidate?.let { LibraryPreview(it) }
+    val previewItem = activePreview?.item
+    LaunchedEffect(currentProfile?.id, sourceKey, previewCandidate?.let(::libraryPreviewKey), calendarMode, collections) {
+        if (!calendarMode && !collections) {
+            val item = previewCandidate
+            if (item == null) {
+                readyPreview = null
+                return@LaunchedEffect
+            }
+            delay(100)
+            viewModel.ensureLogo(item)
+            // Swap complete previews together; never clear the description between cards.
+            val preview = viewModel.loadLibraryPreview(item)
+            readyPreview = preview
+            if (item.isHomeServer) {
+                viewModel.loadLibraryImdbRating(item)?.let { rating ->
+                    readyPreview = preview.copy(item = preview.item.copy(imdbRating = rating))
+                }
+            }
+        }
+    }
     fun selectSource(source: WatchlistSourceItem) {
         if (source is WatchlistSourceItem.HomeServer) {
             viewModel.selectLibraryProvider(source.candidate.serverKind)
@@ -254,6 +322,35 @@ fun WatchlistScreen(
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val columns = libraryColumns(maxWidth.value.toInt(), poster, collections)
                     val width = (maxWidth - 12.dp * (columns - 1)) / columns
+                    if (serverMode) LibraryArtworkPrefetch(grid, items, width - 12.dp, columns, poster)
+                    val previewCatalog = remember(sourceKey, state.selectedSource.title, scopeSources, selectedId) {
+                        CatalogConfig(sourceKey, scopeSources.firstOrNull { it.id == selectedId }?.title
+                            ?: state.selectedSource.title, CatalogSourceType.PREINSTALLED)
+                    }
+                    val spotlightItem = previewItem
+                    val compactSpotlight = compact || maxHeight < 440.dp
+                    val showSpotlight = !collections && items.isNotEmpty()
+                    if (showSpotlight) CollectionBackdrop(previewCatalog, spotlightItem, touch,
+                        collectionSpotlightHeight(touch, compactSpotlight) + 150.dp,
+                        background = Color.Black)
+                    Column(Modifier.fillMaxSize()) {
+                    if (showSpotlight) CollectionSpotlight(previewCatalog, spotlightItem, touch, compactSpotlight, {},
+                        providerLogoUrl = activePreview?.providerLogoUrl ?: spotlightItem?.primaryNetworkLogo,
+                        clearLogoUrl = previewItem?.let { logos[watchlistLogoKey(it)] },
+                        horizontalInset = 6.dp, showBackButton = false, topInset = 16.dp)
+                    // Row anchoring keeps the previous row entirely outside this viewport.
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+                    val rowHeight by remember(grid) { derivedStateOf {
+                        grid.layoutInfo.visibleItemsInfo.maxOfOrNull { it.size.height } ?: 0
+                    } }
+                    val minimumBottomPadding = 16.dp + LocalBottomBarInset.current
+                    val bottomPadding = if (touch || collections) minimumBottomPadding else with(LocalDensity.current) {
+                        libraryGridBottomPadding(maxHeight.roundToPx(), rowHeight,
+                            8.dp.roundToPx(), minimumBottomPadding.roundToPx()).toDp()
+                    }
+                    // Touch keeps native scrolling; TV moves once per row, never per column.
+                    CompositionLocalProvider(LocalBringIntoViewSpec provides
+                        if (touch || collections) LocalBringIntoViewSpec.current else LibraryTvBringIntoViewSpec) {
                     if (collections) {
                         val lists = scopeSources.filter { it.title.contains(query, true) }
                         if(lists.isEmpty()) OledMessage(tr("No lists yet"), tr("Your custom catalogs and personal lists appear here."))
@@ -273,17 +370,18 @@ fun WatchlistScreen(
                             OledMessage(if(error != null) tr("Library unavailable") else tr("No titles found"), error ?: tr("Choose a source or add titles to your watchlist."))
                             if(error != null) OledControl(tr("Retry"), onClick = { if(serverMode) viewModel.refreshLibrary() else viewModel.refresh() })
                         }
-                    } else LazyVerticalGrid(GridCells.Fixed(columns), state = grid, modifier = Modifier.fillMaxSize().testTag("library-grid"),
+                    } else LazyVerticalGrid(GridCells.Fixed(columns), state = grid,
+                        modifier = Modifier.fillMaxSize().arvioDpadFocusGroup(enableFocusRestorer = false)
+                            .clipToBounds().testTag("library-grid"),
                         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(18.dp),
-                        contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp + LocalBottomBarInset.current)) {
+                        contentPadding = PaddingValues(top = 8.dp, bottom = bottomPadding)) {
                         itemsIndexed(items, key = { index, item -> watchlistItemKey(item, index) }) { index, item ->
-                            val reveal = remember { BringIntoViewRequester() }
                             LaunchedEffect(watchlistLogoKey(item), poster) { if(!poster) viewModel.ensureLogo(item) }
-                            Box(Modifier.bringIntoViewRequester(reveal).padding(6.dp).testTag("library-card-frame-$index")) {
+                            Box(Modifier.padding(6.dp).testTag("library-card-frame-$index")) {
                             MediaCard(item, width = width - 12.dp, isLandscape = !poster, logoImageUrl = logos[watchlistLogoKey(item)],
                                 focusedScale = 1.025f, titleMaxLines = 1, showTitle = true,
                                 modifier = Modifier.testTag("library-card-$index"),
-                                onFocused = { viewModel.saveFocusState(0, index); if(!touch) scrollScope.launch { reveal.bringIntoView() } },
+                                onFocused = { focusedPreviewKey = libraryPreviewKey(item); viewModel.saveFocusState(0, index); revealCard(index, columns) },
                                 onClick = { onNavigateToDetails(item.mediaType, item.id) },
                                 onLongClick = if(state.selectedSourceId == WatchlistSourceItem.MyWatchlist.id && !serverMode) ({ viewModel.removeFromWatchlist(item) }) else null)
                             }
@@ -296,6 +394,9 @@ fun WatchlistScreen(
                         if(error != null) item("retry-page", span = { GridItemSpan(maxLineSpan) }) {
                             OledControl(tr("Could not update this source. Retry"), onClick = { if(serverMode) viewModel.refreshLibrary() else viewModel.refresh() })
                         }
+                    }
+                    }
+                    }
                     }
                 }
             }
@@ -362,6 +463,7 @@ private fun OledSources(sources: List<WatchlistSourceItem>, selectedId: String, 
                         when (provider) {
                             TrackerLibraryProvider.TRAKT -> Icon(painterResource(R.drawable.ic_trakt), contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp))
                             TrackerLibraryProvider.SIMKL -> Icon(painterResource(R.drawable.ic_simkl), contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp))
+                            TrackerLibraryProvider.MDBLIST -> Icon(painterResource(R.drawable.ic_mdblist), contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp))
                             else -> Unit
                         }
                         Text(group.uppercase(), color = Color.White, fontSize = if (provider != null) 8.sp else 13.sp, fontWeight = FontWeight.Bold, letterSpacing = if (provider != null) .3.sp else .6.sp, maxLines = 1)

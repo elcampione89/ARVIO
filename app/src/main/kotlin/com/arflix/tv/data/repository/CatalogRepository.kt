@@ -972,6 +972,123 @@ class CatalogRepository @Inject constructor(
         return Result.success(newCatalog)
     }
 
+    /**
+     * Adds a YouTube video link to the profile's YouTube row, creating the row on first use.
+     * Returns the row and the video's title. The title comes from YouTube's public oEmbed
+     * endpoint, falling back to the video id.
+     */
+    suspend fun addYouTubeVideo(
+        rawUrl: String,
+        parentPin: String? = null,
+        targetProfileId: String = profileManager.getProfileIdSync()
+    ): Result<Pair<CatalogConfig, String>> {
+        suspend fun approvalError(): CatalogException? {
+            val profile = profileManager.getActiveProfile()
+            if (targetProfileId != profileManager.getProfileIdSync() ||
+                (profile?.id ?: "default") != targetProfileId) {
+                return CatalogException(R.string.youtube_profile_changed)
+            }
+            return if (YouTubeCollection.canAddToProfile(profile, parentPin)) null
+            else CatalogException(R.string.youtube_parent_approval_required)
+        }
+        approvalError()?.let { return Result.failure(it) }
+        val videoId = YouTubeCollection.videoIdFromUrl(rawUrl)
+            ?: return Result.failure(CatalogException(R.string.catalog_url_invalid))
+        val oembed = fetchUrl(
+            "https://www.youtube.com/oembed?format=json&url=" +
+                java.net.URLEncoder.encode(YouTubeCollection.watchUrl(videoId), "UTF-8")
+        )
+        val title = oembed?.let {
+            runCatching {
+                com.google.gson.JsonParser.parseString(it).asJsonObject.get("title")?.asString
+            }.getOrNull()
+        }?.trim()?.takeIf { it.isNotBlank() } ?: videoId
+
+        approvalError()?.let { return Result.failure(it) }
+        var updated: CatalogConfig? = null
+        var error: CatalogException? = null
+        // Check the limit against the latest list in the same transaction as the addition.
+        context.settingsDataStore.edit { prefs ->
+            if (targetProfileId != profileManager.getProfileIdSync()) {
+                error = CatalogException(R.string.youtube_profile_changed)
+                return@edit
+            }
+            val current = sanitizeCollectionCatalogs(readCatalogsFromPrefs(targetProfileId, prefs)).toMutableList()
+            val index = current.indexOfFirst { it.sourceType == CatalogSourceType.YOUTUBE }
+            val existing = current.getOrNull(index)
+            val videos = YouTubeCollection.decode(existing?.sourceRef)
+            if (videos.any { it.id == videoId }) {
+                error = CatalogException(R.string.catalog_already_added)
+                return@edit
+            }
+            if (videos.size >= YouTubeCollection.MAX_VIDEOS) {
+                error = CatalogException(R.string.youtube_collection_full, listOf(YouTubeCollection.MAX_VIDEOS))
+                return@edit
+            }
+            val ref = YouTubeCollection.encode(listOf(YouTubeCollection.Video(videoId, title)) + videos)
+            val row = existing?.copy(sourceRef = ref) ?: CatalogConfig(
+                id = "youtube_${System.currentTimeMillis()}", title = YouTubeCollection.DEFAULT_TITLE,
+                sourceType = CatalogSourceType.YOUTUBE, sourceRef = ref, isPreinstalled = false
+            )
+            if (existing != null) current[index] = row else current.add(0, row)
+            writeCatalogField(prefs, targetProfileId, "catalogsByProfile", gson.toJson(current))
+            updated = row
+        }
+        error?.let { return Result.failure(it) }
+        invalidationBus.markDirty(CloudSyncScope.CATALOGS, targetProfileId, "add YouTube video")
+        return Result.success(requireNotNull(updated) to title)
+    }
+
+    /** Moves one video of the profile's YouTube row by [delta] places (negative = towards the top). */
+    suspend fun moveYouTubeVideo(catalogId: String, videoId: String, delta: Int): Result<Unit> {
+        val targetProfileId = profileManager.getProfileIdSync()
+        val current = getCatalogsForProfile(targetProfileId).toMutableList()
+        val index = current.indexOfFirst { it.id == catalogId && it.sourceType == CatalogSourceType.YOUTUBE }
+        if (index < 0) return Result.failure(CatalogException(R.string.catalog_not_found))
+        val videos = YouTubeCollection.decode(current[index].sourceRef).toMutableList()
+        val from = videos.indexOfFirst { it.id == videoId }
+        val to = from + delta
+        if (from < 0 || to !in videos.indices) return Result.success(Unit)
+        videos.add(to, videos.removeAt(from))
+        current[index] = current[index].copy(sourceRef = YouTubeCollection.encode(videos))
+        saveCatalogs(current, targetProfileId = targetProfileId)
+        return Result.success(Unit)
+    }
+
+    /** Removes one video from the profile's YouTube row; the row itself stays, even when empty. */
+    suspend fun removeYouTubeVideo(catalogId: String, videoId: String): Result<Unit> {
+        val targetProfileId = profileManager.getProfileIdSync()
+        val current = getCatalogsForProfile(targetProfileId).toMutableList()
+        val index = current.indexOfFirst { it.id == catalogId && it.sourceType == CatalogSourceType.YOUTUBE }
+        if (index < 0) return Result.failure(CatalogException(R.string.catalog_not_found))
+        val videos = YouTubeCollection.decode(current[index].sourceRef)
+        current[index] = current[index].copy(sourceRef = YouTubeCollection.encode(videos.filterNot { it.id == videoId }))
+        saveCatalogs(current, targetProfileId = targetProfileId)
+        return Result.success(Unit)
+    }
+
+    /**
+     * Appends TMDB catalogs to [profileId]'s list, after its own rows, skipping any whose page
+     * is already there. Used for a kids profile's starter rows; afterwards they are ordinary
+     * catalogs the profile can hide, move, rename or remove. [starters] are (id, title, url).
+     */
+    suspend fun appendTmdbCatalogs(profileId: String, starters: List<Triple<String, String, String>>) {
+        val current = getCatalogsForProfile(profileId)
+        val added = starters.mapNotNull { (id, title, url) ->
+            val parsed = CatalogUrlParser.parseTmdb(url) ?: return@mapNotNull null
+            if (current.any { it.id == id || it.sourceUrl.equals(url, ignoreCase = true) }) return@mapNotNull null
+            CatalogConfig(
+                id = id,
+                title = title,
+                sourceType = CatalogSourceType.TMDB,
+                sourceUrl = url,
+                sourceRef = tmdbSourceRef(parsed),
+                isPreinstalled = false
+            )
+        }
+        if (added.isNotEmpty()) saveCatalogs(current + added, targetProfileId = profileId)
+    }
+
     suspend fun updateCustomCatalog(catalogId: String, rawUrl: String): Result<CatalogConfig> {
         val targetProfileId = profileManager.getProfileIdSync()
         val current = getCatalogsForProfile(targetProfileId).toMutableList()
@@ -1172,6 +1289,7 @@ class CatalogRepository @Inject constructor(
             CatalogSourceType.PREINSTALLED -> null
             CatalogSourceType.ADDON -> null
             CatalogSourceType.HOME_SERVER -> null
+            CatalogSourceType.YOUTUBE -> null
         }
     }
 
@@ -1209,6 +1327,7 @@ class CatalogRepository @Inject constructor(
             CatalogSourceType.PREINSTALLED -> null
             CatalogSourceType.ADDON -> null
             CatalogSourceType.HOME_SERVER -> null
+            CatalogSourceType.YOUTUBE -> null
         }
     }
 
@@ -1577,6 +1696,7 @@ class CatalogRepository @Inject constructor(
             // URL/ref evidence always wins over stale enum values from older builds.
             sourceRef?.startsWith(HomeServerRepository.CATALOG_SOURCE_REF_PREFIX, ignoreCase = true) == true -> CatalogSourceType.HOME_SERVER
             sourceRef?.startsWith(ADDON_SOURCE_REF_PREFIX, ignoreCase = true) == true -> CatalogSourceType.ADDON
+            sourceRef?.startsWith(YouTubeCollection.SOURCE_REF_PREFIX) == true -> CatalogSourceType.YOUTUBE
             sourceRef?.startsWith("simkl_list:", ignoreCase = true) == true -> CatalogSourceType.SIMKL
             sourceUrl?.let { CatalogUrlParser.parseSimkl(it) } != null -> CatalogSourceType.SIMKL
             sourceRef?.startsWith("trakt_", ignoreCase = true) == true -> CatalogSourceType.TRAKT

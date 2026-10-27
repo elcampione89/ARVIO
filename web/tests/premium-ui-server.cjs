@@ -1,6 +1,6 @@
 // Run locally after installing web and netlify-auth-site dependencies.
 // npm's production build never includes this fixture server.
-const { build } = require('../../netlify-auth-site/node_modules/esbuild');
+const { build } = require('esbuild');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
@@ -22,10 +22,10 @@ const root = path.resolve(__dirname, '..');
       res.setHeader('content-type', url.pathname.endsWith('js') ? 'text/javascript' : 'text/css');
       res.end(url.pathname.endsWith('js') ? js : css); return;
     }
-    if (['/arvio-logo.svg', '/arvio-wordmark.svg'].includes(url.pathname)) {
-      res.setHeader('content-type', 'image/svg+xml'); res.end(fs.readFileSync(path.join(root, 'public', url.pathname))); return;
+    if (['/arvio-logo.svg', '/arvio-wordmark.svg'].includes(url.pathname) || /^\/premium\/(home|tv|library|homeserver|sports)\.png$/.test(url.pathname)) {
+      res.setHeader('content-type', url.pathname.endsWith('.png') ? 'image/png' : 'image/svg+xml'); res.end(fs.readFileSync(path.join(root, 'public', url.pathname))); return;
     }
     res.setHeader('content-type', 'text/html');
     res.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Premium flow test</title><link rel="stylesheet" href="/bundle.css"></head><body><div id="root"></div><script src="/bundle.js"></script></body></html>');
-  }).listen(3098, '127.0.0.1', () => console.log('Premium UI fixture: http://127.0.0.1:3098 (trial), /?case=paywall, /?case=error'));
+  }).listen(3098, '127.0.0.1', () => console.log('Premium UI fixture: http://127.0.0.1:3098/?case=paywall, /?case=checkout, /?case=error'));
 })().catch(error => { console.error(error); process.exit(1); });

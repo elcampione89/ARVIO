@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="settings_preference_save_failed">Could not save this setting. Please try again.</string>
     <string name="stream_source_cached">Cached</string>
     <string name="live_sports_source_count">Sources: %1$d</string>
     <string name="live_sports_addon_sources">Broadcast listed by add-on</string>
@@ -203,6 +204,9 @@
     <string name="guide_rows_desc">Channel rows shown in the TV guide</string>
     <string name="trailer_in_cards">Trailers In Cards</string>
     <string name="trailer_in_cards_desc">TV: preview trailers in the expanded card instead of the hero</string>
+    <string name="netflix_home_style">Netflix-Style Home</string>
+    <string name="netflix_home_style_desc">TV: large featured billboard with trailer, focused card expands with its description</string>
+    <string name="home_more_info">More Info</string>
     <string name="frame_rate_desc">Off, Seamless, or Always</string>
     <string name="quality_filters_desc">Exclude quality tiers on this device</string>
     <string name="card_layout_desc">Landscape or poster cards</string>
@@ -230,7 +234,7 @@
     <string name="show_loading_stats_desc">Display stream resolution progress</string>
     <string name="volume_boost_desc">Amplify quiet sources (via system LoudnessEnhancer)</string>
     <string name="dns_desc">Resolve API and stream requests</string>
-    <string name="add_catalog_desc">Import a Trakt, MDBList or TMDB catalog URL</string>
+    <string name="add_catalog_desc">Import a Trakt, MDBList or TMDB catalog URL, or add a YouTube video link</string>
 
     <!-- Player / audio -->
     <string name="audio_track">Audio Track</string>
@@ -743,7 +747,7 @@
     <string name="settings_badge_full_short">Full</string>
     <string name="settings_search_lists">Search Lists</string>
     <string name="settings_paste_url">Paste URL</string>
-    <string name="settings_ph_trakt_mdblist">Trakt, MDBList, SIMKL or TMDB URL</string>
+    <string name="settings_ph_trakt_mdblist">YouTube, Trakt, MDBList, SIMKL or TMDB URL</string>
     <string name="settings_add_url">Add URL</string>
     <string name="settings_searching_both_sources">Searching both sources</string>
     <string name="settings_lists_found">%1$d lists found</string>
@@ -809,8 +813,10 @@
     <string name="settings_badge_checking">CHECKING</string>
     <string name="settings_badge_update">UPDATE</string>
     <string name="settings_badge_check">CHECK</string>
-    <string name="settings_diagnostics_sharing">Share diagnostics and usage</string>
-    <string name="settings_diagnostics_sharing_desc">Send anonymous crash diagnostics and app startup events to help improve ARVIO</string>
+    <string name="settings_diagnostics_sharing">Share crash diagnostics</string>
+    <string name="settings_diagnostics_sharing_desc">Send crash and freeze reports to Firebase Crashlytics. This choice stays on this device.</string>
+    <string name="settings_usage_statistics">Share usage statistics</string>
+    <string name="settings_usage_statistics_desc">Optional Firebase Analytics for screen usage and playback reliability. No titles, searches or provider URLs. Off by default; advertising features stay disabled.</string>
     <string name="settings_privacy_policy">Privacy policy</string>
     <string name="settings_privacy_policy_desc">Read how ARVIO processes data, retention policies, data providers, and your privacy rights</string>
     <string name="settings_account_data_deletion">Delete cloud account and data</string>
@@ -1014,6 +1020,20 @@
     <string name="profile_set_pin">Set PIN</string>
     <string name="profile_change_pin">Change PIN</string>
     <string name="profile_remove_pin">Remove PIN</string>
+    <string name="profile_kids">Kids Profile</string>
+    <string name="profile_kids_on">On</string>
+    <string name="profile_kids_off">Off</string>
+    <string name="profile_kids_badge">Kids</string>
+    <string name="profile_kids_max_age">Max age</string>
+    <string name="profile_kids_little">Up to 7</string>
+    <string name="profile_kids_older">Up to 10</string>
+    <string name="profile_kids_teens">Up to 14</string>
+    <string name="profile_kids_hint">Only titles rated for this age. Unrated titles and Live TV are hidden.</string>
+    <string name="kids_title_blocked">Not available on this kids profile</string>
+    <string name="kids_row_movies">Movies for Kids</string>
+    <string name="kids_row_shows">Kids Shows</string>
+    <string name="kids_row_animated">Animated Favorites</string>
+    <string name="kids_row_family_shows">Family Shows</string>
     <string name="profile_change_photo">Change Photo</string>
     <string name="profile_upload_photo">Upload Photo</string>
     <string name="profile_remove_photo">Remove Photo</string>
@@ -1621,7 +1641,7 @@
     <string name="catalog_url_invalid_format">Invalid URL format</string>
     <string name="catalog_url_invalid_host">Invalid host</string>
     <string name="catalog_url_trakt_hint">Use a Trakt list URL: trakt.tv/users/{user}/lists/{list}</string>
-    <string name="catalog_url_unsupported">Only Trakt, MDBList, SIMKL and TMDB URLs are supported</string>
+    <string name="catalog_url_unsupported">Only Trakt, MDBList, SIMKL, TMDB and YouTube video URLs are supported</string>
     <string name="iptv_progress_loading_channels">Loading channels from portal...</string>
     <string name="iptv_progress_loading_full_epg">Loading full EPG (%1$d/%2$d)...</string>
     <string name="iptv_progress_loading_live">Loading live streams...</string>
@@ -1888,5 +1908,36 @@
     <string name="settings_simkl_lists_connect">Connect SIMKL</string>
     <string name="settings_simkl_lists_connected">SIMKL connected</string>
     <string name="settings_simkl_open">Open SIMKL</string>
+    <string name="live_subtitles">Subtitles</string>
+    <string name="live_subtitles_off">Off</string>
+    <string name="live_audio">Audio</string>
+    <string name="watchlist_on_home">Show watchlist on home</string>
+    <string name="watchlist_on_home_desc">Place your watchlist below Continue Watching.</string>
+    <string name="list_add_to">Add to list</string>
+    <string name="list_picker_loading">Loading your lists…</string>
+    <string name="list_picker_empty">No lists on your connected services</string>
+    <string name="list_added_to">Added to %1$s</string>
+    <string name="list_removed_from">Removed from %1$s</string>
+    <string name="list_update_failed">Could not update %1$s</string>
+    <string name="profile_parent_pin_set">Set a parent PIN for this kids profile</string>
+    <string name="profile_parent_pin_enter">Parent PIN</string>
+    <string name="profile_parent_pin_hint">4-5 digits. Needed to change or delete this kids profile, not to watch.</string>
+    <!-- YouTube collection -->
+    <string name="youtube_add_link">Add YouTube link</string>
+    <string name="youtube_link_label">YouTube link</string>
+    <string name="youtube_add_link_desc">Paste a youtu.be or youtube.com video link</string>
+    <string name="youtube_video_count">%1$d YouTube videos</string>
+    <string name="youtube_no_videos">No videos yet. Add a YouTube link.</string>
+    <string name="youtube_videos_home_order">%1$d videos • shown on Home in this order</string>
+    <string name="youtube_videos_home_order_tv">%1$d videos • shown on Home in this order • Left/Right: move or remove</string>
+    <string name="youtube_rename_row">Rename row</string>
+    <string name="youtube_press_ok_again_remove">Press OK again to remove</string>
+    <string name="youtube_ok_move_up">%1$d • OK: move up</string>
+    <string name="youtube_ok_move_down">%1$d • OK: move down</string>
+    <string name="youtube_ok_remove">%1$d • OK: remove</string>
+    <string name="youtube_video_removed">Removed %1$s</string>
+    <string name="youtube_collection_full">This collection has reached the limit of %1$d videos. Remove a video before adding another.</string>
+    <string name="youtube_parent_approval_required">A correct parent PIN is required to add videos to this kids profile. Set a parent PIN in Manage Profiles if needed.</string>
+    <string name="youtube_profile_changed">The profile changed. Please add the video again.</string>
 </resources>
 

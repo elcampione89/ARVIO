@@ -9,7 +9,6 @@ function premiumDestination(pathname) {
   target.searchParams.set("utm_medium", "website");
   target.searchParams.set("utm_campaign", "premium");
   if (placement) target.searchParams.set("utm_content", placement === "nav" ? "navigation" : placement);
-  if (kind === "premium") target.searchParams.set("intent", "trial");
   return target.href;
 }
 if (typeof module !== "undefined") module.exports = { premiumDestination };

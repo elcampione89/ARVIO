@@ -12,7 +12,9 @@ enum class CatalogSourceType {
     // person, keyword or genre.
     TMDB,
     ADDON,
-    HOME_SERVER
+    HOME_SERVER,
+    // The user's own YouTube videos, kept in the catalog itself (see YouTubeCollection).
+    YOUTUBE
 }
 
 enum class CatalogKind {
@@ -141,6 +143,7 @@ val CatalogConfig.effectivePackId: String
         CatalogSourceType.MDBLIST -> "mdblist"
         CatalogSourceType.TMDB -> "tmdb"
         CatalogSourceType.HOME_SERVER -> "home_server"
+        CatalogSourceType.YOUTUBE -> "youtube"
     }
 
 val CatalogConfig.effectivePackName: String
@@ -152,6 +155,7 @@ val CatalogConfig.effectivePackName: String
         CatalogSourceType.MDBLIST -> "MDBlist Catalogs"
         CatalogSourceType.TMDB -> "TMDB Catalogs"
         CatalogSourceType.HOME_SERVER -> "Home Server Catalogs"
+        CatalogSourceType.YOUTUBE -> "YouTube"
     }
 
 val CatalogConfig.isBulkDeletablePack: Boolean

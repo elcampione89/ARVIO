@@ -1,5 +1,20 @@
 package com.arflix.tv.ui.screens.tv.live
 
+import androidx.media3.common.util.StuckPlayerException
+
+/** How long a live stream may buffer without its buffer moving before it counts as stalled. */
+internal const val LIVE_STUCK_BUFFERING_TIMEOUT_MS = 12_000
+
+/** True when the player gave up because buffering stopped making progress, not on a load error. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+internal fun Throwable.isStuckBuffering(): Boolean =
+    generateSequence(this) { it.cause }.any { cause ->
+        cause is StuckPlayerException && (
+            cause.stuckType == StuckPlayerException.STUCK_BUFFERING_NO_PROGRESS ||
+                cause.stuckType == StuckPlayerException.STUCK_BUFFERING_NOT_LOADING
+            )
+    }
+
 private val terminalPlaybackHttpCodes = setOf(401, 403, 429, 444, 451, 513)
 
 internal fun isMissingPlaybackResource(httpCode: Int?): Boolean = httpCode == 404 || httpCode == 410

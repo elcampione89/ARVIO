@@ -8,7 +8,7 @@ test('Premium landing preserves language and carries journey only to first-party
   assert.equal(new URL(result.links[0].href).searchParams.get('lang'), 'es-ES');
   result.activate(1);
   assert.equal(new URL(result.links[1].href).searchParams.get('arvio_journey'), id);
-  assert.equal(new URL(result.links[1].href).searchParams.get('intent'), 'trial');
+  assert.equal(new URL(result.links[1].href).searchParams.has('intent'), false);
   assert.equal(result.links[2].href, 'https://ko-fi.com/arvio/tiers');
   assert.equal(result.links[3].href, 'https://github.com/ProdigyV21/ARVIO');
 });
@@ -46,7 +46,7 @@ test('DNT and GPC disable measurement and decoration', () => {
   for (const navigator of [{ doNotTrack: '1' }, { globalPrivacyControl: true }]) {
     const result = run({ navigator });
     assert.equal(result.events.length, 0);
-    assert.equal(result.links[1].href, 'https://web.arvio.tv/?intent=trial');
+    assert.equal(result.links[1].href, 'https://web.arvio.tv/');
   }
 });
 test('Blocked analytics never prevent membership navigation', async () => {

@@ -67,6 +67,19 @@ test('Simkl updates retain unchanged rows and do not fetch IDs without a deletio
   assert.equal(state.requests.filter(p => p.includes('ids_only')).length, 0);
 });
 
+test('Simkl TV and anime changes are not masked by an unchanged movie activity marker', async () => {
+  const { client, state, expire, row } = libraryFixture();
+  state.activities = { movies: { all: '2026-09-08T10:00:00Z' }, tv_shows: { all: '2026-09-08T10:00:00Z' } };
+  await client.watchlist();
+  state.activities.tv_shows.all = '2026-09-08T11:00:00Z';
+  state.delta.shows = [{ ...row(3, 'shows'), status: 'completed' }];
+  expire();
+  const result = await client.watchlist();
+  assert.ok(!result.some(item => item.show?.ids?.tmdb === 3));
+  assert.equal(client.snapshot.activity, '2026-09-08T11:00:00Z');
+  assert.equal(state.requests.filter(p => p.includes('date_from=2026-09-08T10')).length, 1);
+});
+
 test('calendar retains anime without TMDB IDs for bounded identity resolution instead of silently dropping them', async () => {
   const { client, state } = libraryFixture();
   state.initial.anime = [{ status: 'watching', show: { title: 'Anime with external identity', year: 2026, ids: { simkl: 900, tvdb: 123, imdb: 'tt1234567' } } }];

@@ -227,7 +227,7 @@ fun AppBottomBar(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            bottomBarItems.forEach { item ->
+            bottomBarItems.filter { it.route != "tv" || !KidsNavigation.hideLiveTv }.forEach { item ->
                 val isSelected = currentRoute?.contains(item.route, ignoreCase = true) == true
                 var isFocused by remember { mutableStateOf(false) }
                 val label = stringResource(item.labelRes)

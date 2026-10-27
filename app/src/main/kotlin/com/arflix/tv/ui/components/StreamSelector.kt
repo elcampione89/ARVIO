@@ -374,11 +374,12 @@ fun StreamSelector(
         }
     }
 
-    var fallbackFocusedIndex by remember { mutableIntStateOf(0) }
-    var focusedStreamKey by remember { mutableStateOf<String?>(null) }
+    // Focus is a row position, not a particular source: while results keep arriving it stays on
+    // the same row (the top one when the picker opens). Following the focused source instead made
+    // focus ride a row down the list as results were inserted above it.
+    var focusedStreamIndex by remember { mutableIntStateOf(0) }
     fun resetStreamFocus() {
-        fallbackFocusedIndex = 0
-        focusedStreamKey = null
+        focusedStreamIndex = 0
     }
     var focusedTabIndex by remember { mutableIntStateOf(0) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
@@ -525,12 +526,10 @@ fun StreamSelector(
     val flatStreams = remember(flatPresentations) { flatPresentations.map { it.stream } }
     val streamKeys = remember(flatStreams) { sourceStreamRowKeys(flatStreams) }
     fun currentStreamFocusIndex(): Int =
-        focusedStreamKey?.let { streamKeys.indexOf(it).takeIf { index -> index >= 0 } }
-            ?: fallbackFocusedIndex.coerceIn(0, (flatStreams.size - 1).coerceAtLeast(0))
+        focusedStreamIndex.coerceIn(0, (flatStreams.size - 1).coerceAtLeast(0))
     val focusedIndex = currentStreamFocusIndex()
     fun focusStream(index: Int) {
-        fallbackFocusedIndex = index
-        focusedStreamKey = streamKeys.getOrNull(index)
+        focusedStreamIndex = index
     }
     val edgePadding = with(density) { 22.dp.roundToPx() }
 
@@ -554,12 +553,7 @@ fun StreamSelector(
     LaunchedEffect(isVisible, focusZone, focusedStream, renderedTabIndex) {
         if (isVisible && focusZone == "streams" && selectedTabIndex == renderedTabIndex &&
             currentStreamFocusIndex() == focusedIndex) {
-            focusedStream?.let {
-                if (focusedStreamKey !in streamKeys) {
-                    focusedStreamKey = streamKeys[focusedIndex]
-                }
-                focusedCallback(it)
-            }
+            focusedStream?.let { focusedCallback(it) }
         }
     }
 

@@ -73,6 +73,8 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
     lateinit var watchlistRepository: WatchlistRepository
     @Inject
     lateinit var appUsageAnalyticsRepository: AppUsageAnalyticsRepository
+    @Inject
+    lateinit var kidsStarterCatalogs: com.arflix.tv.data.repository.KidsStarterCatalogs
 
     /**
      * [OkHttpProvider.init] must run before *anything* first touches [OkHttpProvider.client]:
@@ -92,9 +94,32 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
     }
 
     override fun onCreate() {
+        val crashProcess = currentProcessName()?.endsWith(":crash") == true
+        if (!crashProcess) DiagnosticsManager.initialize(this)
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val prefs = getSharedPreferences("arvio_crash_store", android.content.Context.MODE_PRIVATE)
+                val reference = java.util.UUID.randomUUID().toString()
+                AppLogger.setCrashContext("arvio_report_id", reference)
+                prefs.edit()
+                    .putString("last_crash_id", reference)
+                    .putString("last_crash_provider", "firebase")
+                    .putString("last_crash_msg", AppLogger.sanitize("${throwable::class.java.simpleName}: ${throwable.message.orEmpty()}").take(200))
+                    .putLong("last_crash_time", System.currentTimeMillis())
+                    .putString("last_crash_version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                    .putBoolean("has_pending_crash_report", true)
+                    .commit()
+            } catch (_: Throwable) {
+            } finally {
+                defaultHandler?.uncaughtException(thread, throwable)
+                    ?: android.os.Process.killProcess(android.os.Process.myPid())
+            }
+        }
         com.arflix.tv.network.initializeNetworkPlatform(this)
         super.onCreate()
         instance = this
+        if (crashProcess) return
         runCatching { com.arflix.tv.vpn.VpnController.init(this) }
 
         // Initialize global DNS provider and user agent from DataStore before network calls.
@@ -117,25 +142,6 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
             }
         }
 
-        DiagnosticsManager.initialize(this)
-
-        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            try {
-                val prefs = getSharedPreferences("arvio_crash_store", android.content.Context.MODE_PRIVATE)
-                val fallbackId = java.util.UUID.randomUUID().toString()
-                prefs.edit()
-                    .putString("last_crash_id", fallbackId)
-                    .putString("last_crash_msg", "${throwable::class.java.simpleName}: ${throwable.message?.take(200) ?: ""}")
-                    .putLong("last_crash_time", System.currentTimeMillis())
-                    .putString("last_crash_version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-                    .putBoolean("has_pending_crash_report", true)
-                    .commit()
-            } catch (_: Throwable) {
-            } finally {
-                defaultHandler?.uncaughtException(thread, throwable) ?: android.os.Process.killProcess(android.os.Process.myPid())
-            }
-        }
         // Initialize active profile asynchronously to avoid blocking cold start.
         // Wire realtime push notification when realtime is enabled.
         cloudSyncRepository.onPushCompleted = { realtimeSyncManager.markPush() }
@@ -170,6 +176,9 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
                     AppLogger.recordException(e)
                 }
             }
+            // After the first cloud pull: a kids profile synced from another device brings its
+            // "starter rows added" flag along, so rows removed there are not added back here.
+            kidsStarterCatalogs.start()
         }
 
         appScope.launch {
@@ -268,6 +277,13 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
             }
             .build()
             .also { appImageLoader = it }
+    }
+
+    private fun currentProcessName(): String? = if (Build.VERSION.SDK_INT >= 28) {
+        getProcessName()
+    } else {
+        (getSystemService(ACTIVITY_SERVICE) as? ActivityManager)?.runningAppProcesses
+            ?.firstOrNull { it.pid == android.os.Process.myPid() }?.processName
     }
 
     override fun onTrimMemory(level: Int) {

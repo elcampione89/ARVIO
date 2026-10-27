@@ -87,15 +87,35 @@ class HomeProfilePreferencesTest {
     fun `missing settings preserve Home defaults`() {
         val settings = readHomeProfilePreferences(mutablePreferencesOf(), "primary")
 
-        assertThat(settings.trailerAutoPlay).isTrue()
+        assertThat(settings.trailerAutoPlay).isFalse()
         assertThat(settings.trailerSoundEnabled).isFalse()
         assertThat(settings.trailerDelaySeconds).isEqualTo(1)
-        assertThat(settings.trailerInCards).isTrue()
+        assertThat(settings.trailerInCards).isFalse()
+        assertThat(settings.netflixHomeStyle).isTrue()
         assertThat(settings.showBudget).isTrue()
         assertThat(settings.iptvFavoritesOnHome).isTrue()
+        assertThat(settings.watchlistOnHome).isFalse()
         assertThat(settings.clockFormat).isEqualTo("24h")
         assertThat(settings.smoothScrolling).isFalse()
         assertThat(settings.contentLanguage).isEqualTo("en-US")
+    }
+
+    @Test
+    fun `watchlist placement observes toggles and profile switches`() = runTest {
+        val profileId = MutableStateFlow("primary")
+        val preferences = MutableStateFlow<Preferences>(mutablePreferencesOf())
+        observeHomeProfilePreferences(profileId, preferences).test {
+            assertThat(awaitItem().watchlistOnHome).isFalse()
+            preferences.value = mutablePreferencesOf(
+                booleanPreferencesKey("profile_primary_watchlist_on_home") to true
+            )
+            assertThat(awaitItem().watchlistOnHome).isTrue()
+            profileId.value = "secondary"
+            assertThat(awaitItem().watchlistOnHome).isFalse()
+            profileId.value = "primary"
+            assertThat(awaitItem().watchlistOnHome).isTrue()
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test

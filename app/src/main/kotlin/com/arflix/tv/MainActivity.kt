@@ -769,6 +769,7 @@ fun ArflixApp(
     var isSettingsSubPage by remember { mutableStateOf(false) }
     var isTvSubScreen by remember { mutableStateOf(false) }
     LaunchedEffect(currentRoute) {
+        com.arflix.tv.util.UsageAnalytics.screen(currentRoute)
         if (currentRoute?.startsWith("tv") != true) {
             iptvFullscreen = false
             isTvSubScreen = false

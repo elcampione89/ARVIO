@@ -178,8 +178,10 @@ internal object StalkerPortalSupport {
         portal: StalkerPortalEntry,
         index: Int
     ): StalkerPortalEntry? {
-        val portalUrl = runCatching { portal.portalUrl }.getOrNull().orEmpty().trim().trimEnd('/')
-        val macAddress = runCatching { portal.macAddress }.getOrNull().orEmpty().trim().uppercase()
+        val portalUrl = stripInvisibleInputChars(runCatching { portal.portalUrl }.getOrNull().orEmpty())
+            .trim().trimEnd('/')
+        val macAddress = stripInvisibleInputChars(runCatching { portal.macAddress }.getOrNull().orEmpty())
+            .trim().uppercase()
         if (portalUrl.isBlank() || macAddress.isBlank()) return null
         return StalkerPortalEntry(
             id = runCatching { portal.id }.getOrNull().orEmpty().trim().ifBlank { "stalker${index + 1}" },

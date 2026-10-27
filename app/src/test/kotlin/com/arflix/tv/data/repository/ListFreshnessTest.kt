@@ -87,4 +87,11 @@ class ListFreshnessTest {
         coEvery { repository.getMovieDetails(any()) } answers { MediaItem(firstArg(), "Movie ${firstArg<Int>()}") }
         coEvery { repository.getTvDetails(any()) } answers { MediaItem(firstArg(), "Series ${firstArg<Int>()}", mediaType = MediaType.TV) }
     }
+
+    @org.junit.Test
+    fun `a bump moves the marker on within the same window`() {
+        val now = 3 * LIST_REFRESH_MS + 5
+        assertEquals(listFreshnessMarker(now, bump = 0) + 1, listFreshnessMarker(now, bump = 1))
+        assertEquals("https://example.test/list/json?_=4", withListFreshness("https://example.test/list/json", now, bump = 1))
+    }
 }

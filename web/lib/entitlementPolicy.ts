@@ -1,6 +1,11 @@
 import type { EntitlementState } from "./entitlement";
 
 export function currentEntitlement(state: EntitlementState | null, now = Date.now()): EntitlementState | null {
+  // Trials are no longer a hosted access tier. Reject both historic shapes,
+  // including a still-valid cache or a malformed mixed paid/trial response.
+  if (state?.reason === "trial" || state?.source === "trial") {
+    return { ...state, entitled: false, reason: "none", status: "expired", trialAvailable: false, trialDurationDays: 0 };
+  }
   if (!state?.entitled || !state.expiresAt) return state;
   const expiry = Date.parse(state.expiresAt);
   if (Number.isFinite(expiry) && expiry > now) return state;
@@ -16,7 +21,7 @@ export function entitlementCheckDelay(state: EntitlementState | null, now = Date
 }
 
 export function trialRemainingLabel(state: EntitlementState | null, now = Date.now()): string | null {
-  if (!state?.entitled || state.reason !== "trial" || !state.expiresAt) return null;
+  if (!currentEntitlement(state, now)?.entitled || state?.reason !== "trial" || !state.expiresAt) return null;
   const remaining = Date.parse(state.expiresAt) - now;
   if (!Number.isFinite(remaining) || remaining <= 0) return null;
   const hours = Math.ceil(remaining / 3_600_000);

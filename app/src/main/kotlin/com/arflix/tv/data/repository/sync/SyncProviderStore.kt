@@ -495,7 +495,7 @@ class SyncProviderStore @Inject constructor(
             if (cleanAccess.isEmpty()) {
                 prefs.remove(accessKey)
                 prefs.remove(refreshKey)
-                prefs.remove(expiresKey)
+                prefs -= expiresKey
             } else {
                 prefs[accessKey] = cleanAccess
                 if (cleanRefresh.isNotEmpty()) {
@@ -503,7 +503,7 @@ class SyncProviderStore @Inject constructor(
                 } else prefs.remove(refreshKey)
                 if (expiresAt != null) {
                     prefs[expiresKey] = expiresAt
-                } else prefs.remove(expiresKey)
+                } else prefs -= expiresKey
                 prefs.remove(legacyKey)
             }
         }
@@ -513,6 +513,9 @@ class SyncProviderStore @Inject constructor(
         return applied
     }
 
+    // Long keys are removed with `-=`: `remove()` returns the old value typed as Long, and as the
+    // last expression of an if/else it is unboxed — a key that was never set (a new profile's
+    // first API key) then threw a NullPointerException and crashed the app.
     suspend fun setMdbListApiKey(apiKey: String?, profileId: String? = null) {
         val updatedAt = System.currentTimeMillis()
         val accessKey = if (profileId != null) mdbListAccessTokenKeyFor(profileId) else mdbListAccessTokenKey()
@@ -527,12 +530,12 @@ class SyncProviderStore @Inject constructor(
                 prefs.remove(legacyKey)
                 prefs.remove(accessKey)
                 prefs.remove(refreshKey)
-                prefs.remove(expiresKey)
+                prefs -= expiresKey
             } else {
                 prefs[legacyKey] = trimmed
                 prefs.remove(accessKey)
                 prefs.remove(refreshKey)
-                prefs.remove(expiresKey)
+                prefs -= expiresKey
             }
         }
         context.settingsDataStore.edit { prefs ->
@@ -552,7 +555,7 @@ class SyncProviderStore @Inject constructor(
             prefs.remove(legacyKey)
             prefs.remove(accessKey)
             prefs.remove(refreshKey)
-            prefs.remove(expiresKey)
+            prefs -= expiresKey
         }
         context.settingsDataStore.edit { prefs ->
             prefs[updatedKey] = updatedAt

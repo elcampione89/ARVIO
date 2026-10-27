@@ -65,7 +65,7 @@ internal fun collectionRating(item: MediaItem?): String? {
     fun valid(value: String) = value.toDoubleOrNull()?.let { it.isFinite() && it > 0 && it <= 10 } == true
     return when {
         valid(item.imdbRating) -> "IMDb ${item.imdbRating}"
-        valid(item.tmdbRating) -> "TMDB ${item.tmdbRating}"
+        !item.isHomeServer && valid(item.tmdbRating) -> "TMDB ${item.tmdbRating}"
         else -> null
     }
 }
@@ -92,14 +92,19 @@ internal fun collectionSpotlightHeight(isMobile: Boolean, compact: Boolean): Dp 
 
 /** One backdrop continues behind the header and grid, rather than ending at their boundary. */
 @Composable
-internal fun CollectionBackdrop(catalog: CatalogConfig?, item: MediaItem?, isMobile: Boolean, height: Dp) {
+internal fun CollectionBackdrop(
+    catalog: CatalogConfig?,
+    item: MediaItem?,
+    isMobile: Boolean,
+    height: Dp,
+    background: Color = appBackgroundDark()
+) {
     val context = LocalContext.current
     val backdrop = item?.backdrop?.takeIf(String::isNotBlank)
         ?: catalog?.collectionHeroImageUrl?.takeIf(String::isNotBlank)
     val request = remember(backdrop, context) {
         ImageRequest.Builder(context).data(backdrop).size(1280, 720).crossfade(160).build()
     }
-    val background = appBackgroundDark()
     Box(Modifier.fillMaxWidth().height(height).testTag("collection_backdrop")) {
         if (backdrop != null) {
             AsyncImage(request, null,
@@ -108,10 +113,11 @@ internal fun CollectionBackdrop(catalog: CatalogConfig?, item: MediaItem?, isMob
         }
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(
             0f to background, 0.25f to background, 0.40f to background.copy(alpha = 0.88f),
-            0.65f to background.copy(alpha = 0.45f), 1f to Color.Transparent
+            0.65f to background.copy(alpha = 0.45f), 0.92f to Color.Transparent,
+            1f to background
         )))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
-            0f to background.copy(alpha = 0.12f), 0.25f to Color.Transparent,
+            0f to background, 0.12f to background.copy(alpha = 0.35f), 0.25f to Color.Transparent,
             0.55f to background.copy(alpha = 0.18f), 0.78f to background.copy(alpha = 0.72f),
             1f to background
         )))
@@ -129,18 +135,20 @@ internal fun CollectionSpotlight(
     onBack: () -> Unit,
     providerLogoUrl: String? = item?.primaryNetworkLogo,
     clearLogoUrl: String? = null,
-    horizontalInset: Dp = if (isMobile) 20.dp else 42.dp
+    horizontalInset: Dp = if (isMobile) 20.dp else 42.dp,
+    showBackButton: Boolean = isMobile,
+    topInset: Dp = 10.dp
 ) {
     val context = LocalContext.current
     val inset = horizontalInset
     val height = collectionSpotlightHeight(isMobile, compact)
     Box(Modifier.fillMaxWidth().height(height).testTag("collection_spotlight")) {
         Column(
-            Modifier.fillMaxSize().padding(start = inset, end = inset, top = 10.dp, bottom = 8.dp),
+            Modifier.fillMaxSize().padding(start = inset, end = inset, top = topInset, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 7.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (isMobile) {
+                if (showBackButton) {
                     IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back), tint = Color.White)
                     }

@@ -1,8 +1,5 @@
 const crypto = require("crypto");
 const { connectLambda, getStore } = require("@netlify/blobs");
-const { privacyHash, sendTransactionalEmail, sha256, normalizeEmail } = require("./_backend");
-const { recordPremiumEvent } = require("./_premium-funnel");
-const { entitlementsStore, readEntitlement, evaluateEntitlement } = require("./_entitlements");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const JOB_RETENTION_MS = 14 * DAY_MS;
@@ -98,136 +95,67 @@ function trialEmailContent(type, expiresAt) {
   };
 }
 
-async function queueTrialEmails(event, email, expiresAt) {
-  const normalized = String(email || "").trim().toLowerCase();
-  if (!normalized || !expiresAt) return [];
-  const store = trialEmailStore(event);
-  const accountKey = privacyHash("premium-funnel-account", normalized);
-  const expiresMs = Date.parse(expiresAt);
-  if (!Number.isFinite(expiresMs)) throw new Error("Invalid trial expiry");
-  const now = new Date();
-  const dueAt = {
-    welcome: now.toISOString(),
-    reminder: new Date(expiresMs - DAY_MS).toISOString(),
-    expired: new Date(expiresMs + 60 * 60 * 1000).toISOString()
-  };
-  const keys = [];
-  for (const type of JOB_TYPES) {
-    const key = trialJobKey(accountKey, type);
-    keys.push(key);
-    if (await getJSON(store, key)) continue;
-    await store.setJSON(key, {
-      accountKey,
-      type,
-      sealedEmail: sealEmail(normalized),
-      dueAt: dueAt[type],
-      expiresAt,
-      status: "pending",
-      attempts: 0,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString()
-    });
-  }
-  return keys;
+async function queueTrialEmails() {
+  // Retained as a safe no-op for older callers. Hosted Web no longer issues
+  // trials, and queuing their service messages would promise unavailable access.
+  return [];
 }
 
-async function deliverTrialEmailJob(event, store, key, job) {
-  const now = new Date();
-  const nowMs = now.getTime();
-  if (!job || job.sentAt || job.status === "suppressed" || !JOB_TYPES.includes(job.type)) return false;
-  if (job.status === "failed" && Number(job.attempts || 0) >= 6) return false;
-  if (Date.parse(job.dueAt || "") > nowMs) return false;
-  if (job.nextAttemptAt && Date.parse(job.nextAttemptAt) > nowMs) return false;
-  if (job.status === "sending" && Date.parse(job.lockedUntil || "") > nowMs) return false;
-  const attempts = Number(job.attempts || 0) + 1;
+async function deliverTrialEmailJob(_event, store, key, job) {
+  if (!job || job.sentAt || job.status === "sent" || job.status === "suppressed" || !JOB_TYPES.includes(job.type)) return false;
+  // Suppress even future-due/locked legacy jobs without decrypting addresses or
+  // contacting the mail provider. Preserve the audit record until normal cleanup.
   await store.setJSON(key, {
     ...job,
-    status: "sending",
-    attempts,
-    lockedUntil: new Date(nowMs + 10 * 60 * 1000).toISOString(),
-    updatedAt: now.toISOString()
+    sealedEmail: null,
+    status: "suppressed",
+    reason: "trials_disabled",
+    lockedUntil: null,
+    updatedAt: new Date().toISOString()
   });
-  try {
-    const email = openEmail(job.sealedEmail);
-    const accessStore = entitlementsStore(event);
-    const record = await readEntitlement(accessStore, sha256(normalizeEmail(email)));
-    const linkedEmail = normalizeEmail(record?.linkedFrom);
-    const linked = linkedEmail && linkedEmail !== normalizeEmail(email)
-      ? await readEntitlement(accessStore, sha256(linkedEmail)) : null;
-    const suppression = trialEmailSuppression(job, record, linked, nowMs);
-    if (suppression) {
-      await store.setJSON(key, { ...job, sealedEmail: null, status: "suppressed", reason: suppression, updatedAt: now.toISOString() });
-      return false;
-    }
-    const content = trialEmailContent(job.type, job.expiresAt);
-    const result = await sendTransactionalEmail(email, content.subject, content.text, content.html);
-    const sentAt = new Date().toISOString();
-    await store.setJSON(key, {
-      ...job,
-      sealedEmail: null,
-      status: "sent",
-      attempts,
-      provider: result?.provider || null,
-      providerId: result?.id || null,
-      sentAt,
-      updatedAt: sentAt
-    });
-    await recordPremiumEvent(event, {
-      email,
-      eventName: `trial_email_${job.type}_sent`,
-      metadata: { provider: result?.provider || "unknown" }
-    }).catch(() => {});
-    return true;
-  } catch (error) {
-    const retryMinutes = Math.min(360, 15 * Math.pow(2, Math.min(4, attempts - 1)));
-    await store.setJSON(key, {
-      ...job,
-      status: attempts >= 6 ? "failed" : "pending",
-      attempts,
-      lastError: String(error?.message || error).slice(0, 240),
-      nextAttemptAt: new Date(nowMs + retryMinutes * 60 * 1000).toISOString(),
-      lockedUntil: null,
-      updatedAt: new Date().toISOString()
-    });
-    throw error;
-  }
+  return false;
 }
 
 async function runDueTrialEmails(event, limit = 50) {
+  const numericLimit = Number(limit);
+  const budget = Number.isFinite(numericLimit) ? Math.max(0, Math.min(500, Math.floor(numericLimit))) : 50;
+  if (!budget) return { sent: 0, failed: 0, deleted: 0, suppressed: 0, processed: 0, scanned: 0 };
   const store = trialEmailStore(event);
   const keys = await listKeys(store, "jobs/");
   let sent = 0;
   let failed = 0;
   let deleted = 0;
+  let suppressed = 0;
+  let processed = 0;
+  let scanned = 0;
   for (const key of keys) {
-    if (sent + failed >= limit) break;
+    if (processed >= budget) break;
+    scanned += 1;
     const job = await getJSON(store, key);
     const completedAt = Date.parse(job?.sentAt || job?.updatedAt || "");
     if (["sent", "failed", "suppressed"].includes(job?.status) && Number.isFinite(completedAt) && Date.now() - completedAt > JOB_RETENTION_MS) {
-      await store.delete(key).catch(() => {});
-      deleted += 1;
+      processed += 1;
+      try { await store.delete(key); deleted += 1; }
+      catch { failed += 1; }
       continue;
     }
+    // Completed jobs do not consume the mutation budget; otherwise the first
+    // already-suppressed page would starve the remaining legacy jobs forever.
+    if (!job || job.sentAt || ["sent", "suppressed"].includes(job.status) || !JOB_TYPES.includes(job.type)) continue;
+    processed += 1;
     try {
       if (await deliverTrialEmailJob(event, store, key, job)) sent += 1;
+      else suppressed += 1;
     } catch (error) {
       failed += 1;
       console.error("trial email delivery failed", key, error);
     }
   }
-  return { sent, failed, deleted, scanned: keys.length };
+  return { sent, failed, deleted, suppressed, processed, scanned };
 }
 
-function trialEmailSuppression(job, record, linkedRecord, now = Date.now()) {
-  const paid = candidate => {
-    const state = evaluateEntitlement(candidate);
-    return state.entitled && state.reason === "subscription";
-  };
-  if (paid(record) || paid(linkedRecord)) return "already_paid";
-  if (!record) return "no_entitlement";
-  if (job.type === "expired" && record.source === "trial" && Date.parse(record.expiresAt) > now) return "trial_still_active";
-  if (job.type !== "expired" && Date.parse(job.expiresAt) <= now) return "stale_trial_message";
-  return null;
+function trialEmailSuppression() {
+  return "trials_disabled";
 }
 
 module.exports = {

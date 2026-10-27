@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -83,6 +84,8 @@ fun MediaContextMenu(
     onToggleWatchlist: () -> Unit,
     onToggleWatched: () -> Unit,
     onRemoveFromContinueWatching: (() -> Unit)? = null,
+    // Shown when a service with personal lists (Trakt, MDBList) is connected.
+    onAddToList: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val isMobile = LocalDeviceType.current.isTouchDevice()
@@ -105,6 +108,13 @@ fun MediaContextMenu(
             labelRes = if (isInWatchlist) R.string.remove_from_watchlist else R.string.add_to_watchlist,
             action = onToggleWatchlist
         ))
+        if (onAddToList != null) {
+            add(MenuItem(
+                icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                labelRes = R.string.list_add_to,
+                action = onAddToList
+            ))
+        }
         add(MenuItem(
             icon = if (isWatched) Icons.Default.Visibility else Icons.Default.Check,
             labelRes = if (isWatched) R.string.unwatched else R.string.watched,

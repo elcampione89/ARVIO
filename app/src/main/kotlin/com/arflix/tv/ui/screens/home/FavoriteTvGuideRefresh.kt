@@ -1,6 +1,7 @@
 package com.arflix.tv.ui.screens.home
 
 import com.arflix.tv.data.model.IptvNowNext
+import com.arflix.tv.data.repository.IptvConfig
 
 /**
  * When the Favorite TV row may go back to the network for guide data: only while the saved
@@ -22,3 +23,12 @@ internal fun favoriteTvGuideNeedsNetwork(
 /** Moving along the row re-reads the saved guide at most once per [intervalMs]. */
 internal fun favoriteTvFocusRefreshDue(lastRefreshMs: Long, nowMs: Long, intervalMs: Long): Boolean =
     lastRefreshMs == 0L || nowMs - lastRefreshMs >= intervalMs
+
+/**
+ * Which IPTV sources the Favorite TV row is built from: the enabled playlists and Stalker
+ * portals. A change means the row may show channels of a source that was just switched off.
+ */
+internal fun iptvFavoriteSourceKey(config: IptvConfig): String = buildList {
+    config.playlists.filter { it.enabled }.forEach { add("p:${it.id}|${it.m3uUrl}") }
+    config.stalkerPortals.filter { it.enabled }.forEach { add("s:${it.id}|${it.portalUrl}|${it.macAddress}") }
+}.joinToString("\n")

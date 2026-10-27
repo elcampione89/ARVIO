@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -102,20 +103,22 @@ fun SettingsRow(
     modifier: Modifier = Modifier
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val foreground = if (isFocused) Color.Black else TextPrimary
-    val secondary = if (isFocused) Color.Black.copy(alpha = 0.65f) else TextSecondary
+    val foreground = TextPrimary
+    val secondary = if (isFocused) Color.White.copy(alpha = 0.8f) else TextSecondary
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .graphicsLayer()
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick
             )
             .background(
-                if (isFocused) Color.White else Color.White.copy(alpha = 0.05f),
+                Color.White.copy(alpha = if (isFocused) 0.1f else 0.05f),
                 RoundedCornerShape(8.dp)
             )
+            .settingsFocusOutline(isFocused)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -180,12 +183,13 @@ fun SettingsToggleRow(
     modifier: Modifier = Modifier
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val foreground = if (isFocused) Color.Black else TextPrimary
-    val secondary = if (isFocused) Color.Black.copy(alpha = 0.65f) else TextSecondary
+    val foreground = TextPrimary
+    val secondary = if (isFocused) Color.White.copy(alpha = 0.8f) else TextSecondary
     val toggleDescription = stringResource(if (isEnabled) R.string.on else R.string.off)
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .graphicsLayer()
             .toggleable(
                 value = isEnabled,
                 role = Role.Switch,
@@ -195,9 +199,10 @@ fun SettingsToggleRow(
             )
             .semantics { stateDescription = toggleDescription }
             .background(
-                if (isFocused) Color.White else Color.White.copy(alpha = 0.05f),
+                Color.White.copy(alpha = if (isFocused) 0.1f else 0.05f),
                 RoundedCornerShape(8.dp)
             )
+            .settingsFocusOutline(isFocused)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -227,7 +232,7 @@ fun SettingsToggleRow(
                 .width(44.dp)
                 .height(24.dp)
                 .background(
-                    color = if (isEnabled) SuccessGreen else if (isFocused) Color.Black.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.2f),
+                    color = if (isEnabled) SuccessGreen else Color.White.copy(alpha = if (isFocused) 0.3f else 0.2f),
                     shape = RoundedCornerShape(13.dp)
                 )
                 .padding(3.dp),

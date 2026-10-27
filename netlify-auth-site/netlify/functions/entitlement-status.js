@@ -1,19 +1,17 @@
 // GET  /entitlement-status  → the web app reads the signed-in account's web
-//                             subscription status (paid / trial / none).
-// POST /entitlement-status  { action: "start-trial" } → consume the one-time
-//                             3-day trial for this account.
+//                             subscription status (paid / none).
+// POST /entitlement-status  { action: "start-trial" } → legacy clients receive
+//                             trial_unavailable; no trial access is created.
 // Auth: the account's ARVIO access token (same as account-sync-*). The email is
-// taken from the verified identity, so a user can only read/trial THEIR account.
+// taken from the verified identity, so a user can only read THEIR account.
 const { json, options, resolveIdentity, normalizeEmail, sha256 } = require("./_backend");
 const {
-  TRIAL_MS,
   entitlementsStore,
   readEntitlement,
   writeEntitlement,
   evaluateEntitlement
 } = require("./_entitlements");
 const { recordPremiumEvent } = require("./_premium-funnel");
-const { queueTrialEmails } = require("./_trial-emails");
 
 function requestAction(event) {
   let raw = event.body;
@@ -30,7 +28,8 @@ function requestAction(event) {
 
   // This endpoint has one authenticated POST operation. Some browsers/proxies
   // have reached Netlify with an empty or encoded body, so keep those requests
-  // backward-compatible instead of rejecting a valid trial with HTTP 400.
+  // backward-compatible so stale requests receive the same trial_unavailable
+  // response rather than accidentally bypassing the paid-access policy.
   return String(body.action || "start-trial").trim().toLowerCase();
 }
 
@@ -56,7 +55,8 @@ exports.handler = async (event) => {
     const store = entitlementsStore(event);
     let record = await readEntitlement(store, emailHash);
 
-    // Start-trial: grant a one-time 3-day trial if never used and not already paid.
+    // Retain the old route for stale clients, without granting free access,
+    // altering account records or sending trial email.
     if (event.httpMethod === "POST") {
       const action = requestAction(event);
       if (action === "start-trial") {
@@ -64,35 +64,11 @@ exports.handler = async (event) => {
         if (current.entitled) {
           return json(200, { ...current, alreadyEntitled: true });
         }
-        if (record && record.trialUsed) {
-          return json(409, { error: "trial_used", ...current });
-        }
-        const now = new Date();
-        record = {
-          ...(record || {}),
-          status: "active",
-          source: "trial",
-          tier: null,
-          startedAt: (record && record.startedAt) || now.toISOString(),
-          expiresAt: new Date(now.getTime() + TRIAL_MS).toISOString(),
-          trialUsed: true,
-          lastEvent: "trial-started",
-          updatedAt: now.toISOString()
-        };
-        await writeEntitlement(store, emailHash, record);
-        await recordPremiumEvent(event, {
-          email,
-          accountId: identity.supabaseUserId,
-          eventName: "trial_started",
-          metadata: { duration_days: 3 }
-        }).catch((error) => console.error("trial funnel recording failed", error));
-        try {
-          await queueTrialEmails(event, email, record.expiresAt);
-        } catch (error) {
-          // Email must never prevent an otherwise valid trial from starting.
-          console.error("trial email scheduling failed", error);
-        }
-        return json(200, { ...evaluateEntitlement(record), trialStarted: true });
+        return json(403, {
+          error: "trial_unavailable",
+          message: "ARVIO Web requires a paid Premium membership. Free trials are no longer available.",
+          ...current
+        });
       }
       return json(400, { error: "unknown_action" });
     }

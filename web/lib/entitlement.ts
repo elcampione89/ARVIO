@@ -1,6 +1,6 @@
 import { AuthClient } from "./auth";
 import { config } from "./config";
-import { HttpError, jsonRequest } from "./http";
+import { jsonRequest } from "./http";
 import { loadStored, saveStored } from "./storage";
 import { currentEntitlement } from "./entitlementPolicy";
 
@@ -60,7 +60,7 @@ function cache(key: string | null, state: EntitlementState) {
 /** Fetch the live entitlement for the signed-in account. */
 export async function fetchEntitlement(auth: AuthClient): Promise<EntitlementState> {
   if (!auth.session) {
-    return { entitled: false, reason: "none", status: "none", source: null, expiresAt: null, trialAvailable: true };
+    return { entitled: false, reason: "none", status: "none", source: null, expiresAt: null, trialAvailable: false, trialDurationDays: 0 };
   }
   const key = accountCacheKey(auth);
   let state = await backendRequest<EntitlementState>(auth, "entitlement-status", { method: "GET" });
@@ -76,38 +76,7 @@ export async function fetchEntitlement(auth: AuthClient): Promise<EntitlementSta
       if (retry?.entitled) state = retry;
     }
   }
-  if (key === accountCacheKey(auth)) cache(key, state);
-  return state;
-}
-
-/** Start the one-time 3-day trial for the signed-in account. */
-export async function startTrial(auth: AuthClient): Promise<EntitlementState> {
-  if (!auth.session) throw new HttpError(401, "Sign in required");
-  const key = accountCacheKey(auth);
-  const attempt = () => backendRequest<EntitlementState>(auth, "entitlement-status", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action: "start-trial" })
-  });
-  let state: EntitlementState;
-  try {
-    state = await attempt();
-  } catch (error) {
-    // A stale access token 401s here even though the paywall itself rendered
-    // (its GET may have come from cache). Refresh the session once and retry
-    // before surfacing an error — this was the main source of "could not
-    // start the trial" reports.
-    if (error instanceof HttpError && error.status === 401) {
-      try {
-        await auth.refresh();
-      } catch {
-        throw new HttpError(401, "Session expired");
-      }
-      state = await attempt();
-    } else {
-      throw error;
-    }
-  }
+  state = currentEntitlement(state) ?? state;
   if (key === accountCacheKey(auth)) cache(key, state);
   return state;
 }

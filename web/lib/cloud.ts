@@ -10,6 +10,7 @@ import { mergeTvSessions, normalizeTvSession } from "./iptvSession";
 import { normalizeIptvPlaylist as normalizeRuntimeIptvPlaylist } from "./iptv";
 import { tmdbImageUrl } from "./mediaImages";
 import type { TraktToken } from "./trakt";
+import { isYouTubeItem } from "./youtubeCollection";
 import type { SimklToken } from "./simkl";
 import type { TrackingPreferences, TrackingReadMode } from "./sync";
 import type { AppSettings, InstalledAddon, IptvPlaylistEntry, MediaItem, Profile, QualityFilterConfig, WatchHistoryEntry } from "./types";
@@ -30,6 +31,8 @@ interface AccountSyncPullResponse {
 }
 
 interface AndroidContinueWatchingItem {
+  addonNativeId?: string | null;
+  addonNativeAddonId?: string | null;
   id?: number;
   title?: string;
   mediaType?: string;
@@ -551,6 +554,7 @@ function androidCwToHistory(item: AndroidContinueWatchingItem, profileId?: strin
   const position = Math.max(0, Number(item.resumePositionSeconds ?? 0));
   const progress = Math.max(0, Math.min(0.99, Number(item.progress ?? 0) / 100));
   return {
+    ...(item.addonNativeId ? { addon_native_id: item.addonNativeId, addon_native_addon_id: item.addonNativeAddonId } : {}),
     user_id: "",
     profile_id: profileId ?? null,
     media_type: mediaType,
@@ -574,6 +578,7 @@ function androidCwToHistory(item: AndroidContinueWatchingItem, profileId?: strin
 
 function historyToAndroidCw(entry: Omit<WatchHistoryEntry, "user_id">): AndroidContinueWatchingItem {
   return {
+    ...(entry.addon_native_id ? { addonNativeId: entry.addon_native_id, addonNativeAddonId: entry.addon_native_addon_id } : {}),
     id: entry.show_tmdb_id,
     title: entry.title ?? "",
     mediaType: entry.media_type,
@@ -1047,10 +1052,50 @@ export interface CloudProfiles {
   avatarImages: Record<string, string>;
 }
 
+/** Most recent deletions kept in the payload; older ids are long gone from every device. */
+const DELETED_PROFILES_LIMIT = 100;
+
+function deletedProfileIds(root: RawPayload): string[] {
+  return arrayValue<unknown>(root.deletedProfileIds).filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
+/**
+ * The account's profile list after one device saves its own. Profiles the device does not
+ * know stay: a browser or TV holding an older copy of the list must not delete a profile
+ * another device added. Only an explicit delete ([deleted]) removes one. For a profile both
+ * sides have, the copy edited last wins (`updatedAt`, stamped on edits only, missing = oldest;
+ * a tie keeps this device's copy), so a stale copy cannot revert newer settings.
+ */
+function newerProfile(local: Profile, remote: Profile): Profile {
+  const edited = (profile: Profile) => Number((profile as { updatedAt?: number }).updatedAt ?? 0) || 0;
+  const winner = edited(remote) > edited(local) ? remote : local;
+  const lastUsedAt = Math.max(Number(local.lastUsedAt) || 0, Number(remote.lastUsedAt) || 0);
+  return lastUsedAt > 0 ? { ...winner, lastUsedAt } : winner;
+}
+
+export function mergeCloudProfiles(remote: Profile[], local: Profile[], deleted: ReadonlySet<string>): Profile[] {
+  const localById = new Map(local.map(profile => [profile.id, profile]));
+  const merged: Profile[] = [];
+  const seen = new Set<string>();
+  for (const profile of remote) {
+    if (!profile?.id || deleted.has(profile.id) || seen.has(profile.id)) continue;
+    const own = localById.get(profile.id);
+    merged.push(own ? newerProfile(own, profile) : profile);
+    seen.add(profile.id);
+  }
+  for (const profile of local) {
+    if (!profile?.id || deleted.has(profile.id) || seen.has(profile.id)) continue;
+    merged.push(profile);
+    seen.add(profile.id);
+  }
+  return merged;
+}
+
 export async function pullCloudProfiles(auth: AuthClient): Promise<CloudProfiles> {
   const root = await pullRawPayload(auth);
+  const deleted = new Set(deletedProfileIds(root));
   return {
-    profiles: arrayValue<Profile>(root.profiles),
+    profiles: arrayValue<Profile>(root.profiles).filter(profile => !deleted.has(profile?.id)),
     activeProfileId: typeof root.activeProfileId === "string" ? root.activeProfileId : null,
     avatarImages: objectRecord<string>(root.profileAvatarImagesById)
   };
@@ -1450,10 +1495,24 @@ export async function pullCloudContinueWatchingDismissals(
   return merged;
 }
 
-export async function saveCloudProfiles(auth: AuthClient, profiles: Profile[], activeProfileId: string | null) {
+/**
+ * Saves this browser's profiles into the account, merged with the list already there (see
+ * [mergeCloudProfiles]); [deletedIds] are the profiles the user deleted here.
+ */
+export async function saveCloudProfiles(
+  auth: AuthClient,
+  profiles: Profile[],
+  activeProfileId: string | null,
+  deletedIds: string[] = []
+) {
   await mutateCloudPayload(auth, (root) => {
-    root.profiles = profiles;
-    root.activeProfileId = activeProfileId;
+    const deleted = [...new Set([...deletedProfileIds(root), ...deletedIds])].slice(-DELETED_PROFILES_LIMIT);
+    const merged = mergeCloudProfiles(arrayValue<Profile>(root.profiles), profiles, new Set(deleted));
+    root.profiles = merged;
+    if (deleted.length) root.deletedProfileIds = deleted;
+    root.activeProfileId = merged.some(profile => profile.id === activeProfileId)
+      ? activeProfileId
+      : merged[0]?.id ?? null;
   });
 }
 
@@ -1539,6 +1598,10 @@ function isLiveOnlyAddon(addon: InstalledAddon): boolean {
 }
 
 export function isLiveStreamOrSportsItem(item: {
+  addonNativeId?: string | null;
+  addonNativeAddonId?: string | null;
+  addon_native_id?: string | null;
+  addon_native_addon_id?: string | null;
   mediaType?: string | null;
   media_type?: string | null;
   id?: number | string | null;
@@ -1557,6 +1620,10 @@ export function isLiveStreamOrSportsItem(item: {
   if (mediaType && mediaType !== "movie" && mediaType !== "tv") {
     return true;
   }
+  if (id < 0 && isYouTubeItem({
+    id, addonNativeId: item.addonNativeId ?? item.addon_native_id,
+    addonNativeAddonId: item.addonNativeAddonId ?? item.addon_native_addon_id
+  })) return false;
   if (!id || id <= 0) {
     return true;
   }
@@ -1624,11 +1691,12 @@ export async function saveProgress(auth: AuthClient, entry: Omit<WatchHistoryEnt
     });
     return;
   }
+  const { addon_native_id: _nativeId, addon_native_addon_id: _nativeAddonId, ...databaseEntry } = entry;
   await auth.supabase("/rest/v1/watch_history", {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates" },
     body: JSON.stringify({
-      ...entry,
+      ...databaseEntry,
       user_id: auth.session.userId,
       profile_id: entry.profile_id ?? profileId ?? null,
       paused_at: new Date().toISOString(),

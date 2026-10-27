@@ -1603,13 +1603,13 @@ class TraktRepository @Inject constructor(
         return all
     }
 
-    private suspend fun getAllHiddenProgressResetShows(auth: String): List<TraktHiddenItem> {
+    private suspend fun getAllDroppedShows(auth: String): List<TraktHiddenItem> {
         val all = mutableListOf<TraktHiddenItem>()
         var page = 1
         val limit = 100
 
         while (true) {
-            val pageItems = traktApi.getHiddenProgressResetShows(auth, clientId, page = page, limit = limit)
+            val pageItems = traktApi.getDroppedShows(auth, clientId, page = page, limit = limit)
             if (pageItems.isEmpty()) break
             all.addAll(pageItems)
             if (pageItems.size < limit) break
@@ -1662,6 +1662,7 @@ class TraktRepository @Inject constructor(
                 )
                 cachedContinueWatching = cached
                 cachedContinueWatchingProfileId = requestProfileId
+                check(cached.isNotEmpty()) { "Trakt Continue Watching is temporarily unavailable" }
                 return@coroutineScope cached
             }
             val localItems = loadLocalContinueWatching()
@@ -1694,6 +1695,7 @@ class TraktRepository @Inject constructor(
             }
             cachedContinueWatching = held
             cachedContinueWatchingProfileId = requestProfileId
+            check(held.isNotEmpty()) { "Trakt Continue Watching is cooling down" }
             return@coroutineScope filterDismissedContinueWatchingItems(held)
         }
 
@@ -1716,7 +1718,8 @@ class TraktRepository @Inject constructor(
             // Trakt Continue Watching is built from explicit paused playback
             // plus recent watched-show progress. We cannot call Trakt's website
             // progress activity feed from API clients, so keep this bounded and
-            // respect both hidden and reset progress sections.
+            // respect both hidden-progress and dropped shows. Reset progress is
+            // rewatch history, not a hidden section (the old endpoint returns 404).
             // Set when Trakt refuses rather than fails, so this resolve can open
             // the breaker instead of the next one retrying straight into it.
             val rateLimited = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -1794,19 +1797,19 @@ class TraktRepository @Inject constructor(
                     emptyList()
                 }
             }
-            val hiddenResetShowsDeferred = async {
+            val droppedShowsDeferred = async {
                 try {
-                    traktCallWithAuthRetry("hidden progress reset shows") { currentAuth ->
-                        getAllHiddenProgressResetShows(currentAuth)
+                    traktCallWithAuthRetry("dropped shows") { currentAuth ->
+                        getAllDroppedShows(currentAuth)
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
 
-                    System.err.println("TraktRepo:getCW: getHiddenResetShows failed: ${e.message}")
+                    System.err.println("TraktRepo:getCW: getDroppedShows failed: ${e.message}")
                     snapshotIncomplete.set(true)
                     AppLogger.breadcrumb(
                         tag = "Trakt",
-                        message = "cw_hidden_reset_failed error=${e::class.java.simpleName}",
+                        message = "cw_dropped_shows_failed error=${e::class.java.simpleName}",
                         severity = "warning"
                     )
                     emptyList()
@@ -1845,7 +1848,7 @@ class TraktRepository @Inject constructor(
                 }
             }
 
-            val hiddenTraktIds = (hiddenShowsDeferred.await() + hiddenResetShowsDeferred.await())
+            val hiddenTraktIds = (hiddenShowsDeferred.await() + droppedShowsDeferred.await())
                 .mapNotNull { it.show?.ids?.trakt }
                 .toSet()
             // Use the same fresh history for playback filtering and Up Next selection.
@@ -1856,6 +1859,7 @@ class TraktRepository @Inject constructor(
             val processedKeys = mutableSetOf<String>()
             var playbackFetched = false
             var watchedProgressFetched = false
+            val failedProgressShows = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
 
             // Claim the actively-scrobbling title first. It is the newest thing
             // the user touched, and for the length of the session it is the only
@@ -2021,6 +2025,7 @@ class TraktRepository @Inject constructor(
 
                                 System.err.println("TraktRepo:getCW: show progress failed for ${show.title}: ${e.message}")
                                 snapshotIncomplete.set(true)
+                                failedProgressShows.add(tmdbId)
                                 AppLogger.breadcrumb(
                                     tag = "Trakt",
                                     message = "cw_show_progress_failed error=${e::class.java.simpleName}",
@@ -2087,7 +2092,7 @@ class TraktRepository @Inject constructor(
                         processedKeys.add(showKey)
                     }
                 }
-                watchedProgressFetched = !snapshotIncomplete.get()
+                watchedProgressFetched = failedProgressShows.isEmpty()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
 
@@ -2101,23 +2106,33 @@ class TraktRepository @Inject constructor(
                 )
             }
 
-            // An incomplete response is not an authoritative replacement for the saved row.
-            // Leave its fetch time untouched so a subsequent refresh can retry.
-            if (!playbackFetched || !watchedProgressFetched || snapshotIncomplete.get()) {
+            val snapshotComplete = playbackFetched && watchedProgressFetched && !snapshotIncomplete.get()
+            // Publish successful updates even if an unrelated show failed. Preserve
+            // saved rows only for the failed reads, never a completed/hidden show or
+            // an old pause that a successful playback read has already removed.
+            if (!snapshotComplete) {
                 if (currentProfileId() != requestProfileId) return@coroutineScope emptyList()
+                lastContinueWatchingFetch = 0L
                 val saved = if (cachedContinueWatchingProfileId == requestProfileId && cachedContinueWatching.isNotEmpty()) {
                     cachedContinueWatching
                 } else {
                     loadContinueWatchingCache()
                 }
-                if (saved.isNotEmpty()) return@coroutineScope filterDismissedContinueWatchingItems(saved)
-                // On a first login there is no snapshot to preserve. Show successful reads
-                // without persisting the incomplete result or marking the refresh as fresh.
-                val partial = hydrateTopCandidates(
-                    candidates.sortedByDescending { it.lastActivityAt }.take(Constants.MAX_CONTINUE_WATCHING)
-                )
-                if (currentProfileId() != requestProfileId) return@coroutineScope emptyList()
-                return@coroutineScope filterDismissedContinueWatchingItems(partial)
+                val hiddenTmdbIds = watchedSnapshot.getOrNull().orEmpty()
+                    .filter { it.show.ids.trakt in hiddenTraktIds }.mapNotNull { it.show.ids.tmdb }.toSet()
+                saved.filter { item ->
+                    val showKey = "${item.mediaType}:${item.id}"
+                    showKey !in processedKeys && (item.mediaType != MediaType.TV || item.id !in hiddenTmdbIds) &&
+                        if (item.isUpNext) {
+                            watchedSnapshot.isFailure || item.id in failedProgressShows
+                        } else {
+                            !playbackFetched && (item.mediaType != MediaType.TV ||
+                                "show_tmdb:${item.id}:${item.season}:${item.episode}" !in watchedEpisodeKeys)
+                        }
+                }.forEach { item ->
+                    candidates.add(ContinueWatchingCandidate(item, if (item.updatedAtMs > 0L)
+                        java.time.Instant.ofEpochMilli(item.updatedAtMs).toString() else ""))
+                }
             }
 
             if (!rateLimited.get() && !isTraktCircuitOpen()) resetTraktCircuit()
@@ -2161,13 +2176,19 @@ class TraktRepository @Inject constructor(
                 message = "cw_candidates playback=$playbackFetched watched=$watchedProgressFetched candidates=${candidates.size} filtered=${filteredCandidates.size} top=${topCandidates.size}",
                 severity = if (topCandidates.isEmpty() && (playbackFetched || watchedProgressFetched)) "warning" else "info"
             )
-            if (topCandidates.isEmpty() && playbackFetched && watchedProgressFetched) {
+            if (topCandidates.isEmpty()) {
+                if (currentProfileId() != requestProfileId) return@coroutineScope emptyList()
+                // No successful answer and no saved row is an outage, not proof
+                // that Home should clear its independently restored cloud row.
+                check(playbackFetched && watchedProgressFetched) {
+                    "Trakt Continue Watching is temporarily unavailable"
+                }
                 if (continueWatchingUpdates.revision != localUpdateRevision) {
                     return@coroutineScope cachedContinueWatching
                 }
                 cachedContinueWatching = emptyList()
                 cachedContinueWatchingProfileId = requestProfileId
-                lastContinueWatchingFetch = System.currentTimeMillis()
+                if (snapshotComplete) lastContinueWatchingFetch = System.currentTimeMillis()
                 persistContinueWatchingCache(emptyList())
                 return@coroutineScope emptyList()
             }
@@ -2189,23 +2210,25 @@ class TraktRepository @Inject constructor(
                 // Filter out items with null season/episode (already validated at candidate creation)
                 val fallbackItems = topCandidates.map { it.item }
                     .filter { it.mediaType != MediaType.TV || (it.season != null && it.episode != null) }
+                if (currentProfileId() != requestProfileId) return@coroutineScope emptyList()
                 if (continueWatchingUpdates.revision != localUpdateRevision) {
                     return@coroutineScope cachedContinueWatching
                 }
                 cachedContinueWatching = fallbackItems
                 cachedContinueWatchingProfileId = requestProfileId
-                lastContinueWatchingFetch = System.currentTimeMillis()
+                if (snapshotComplete) lastContinueWatchingFetch = System.currentTimeMillis()
                 persistContinueWatchingCache(fallbackItems)
                 return@coroutineScope fallbackItems
             }
 
+        if (currentProfileId() != requestProfileId) return@coroutineScope emptyList()
         if (continueWatchingUpdates.revision != localUpdateRevision) {
             return@coroutineScope cachedContinueWatching
         }
         val resolvedItems = if (hydratedItems.isNotEmpty()) {
             cachedContinueWatching = hydratedItems
             cachedContinueWatchingProfileId = requestProfileId
-            lastContinueWatchingFetch = System.currentTimeMillis()
+            if (snapshotComplete) lastContinueWatchingFetch = System.currentTimeMillis()
             persistContinueWatchingCache(hydratedItems)
             hydratedItems
         } else {
@@ -3435,6 +3458,39 @@ class TraktRepository @Inject constructor(
         }
     }
 
+    /** Adds a title to, or removes it from, one of the user's own lists; true only when Trakt applied it. */
+    suspend fun modifyPersonalList(
+        listId: String,
+        mediaType: MediaType,
+        tmdbId: Int,
+        add: Boolean
+    ): Boolean {
+        val auth = getAuthHeader() ?: return false
+        val ids = TraktIds(tmdb = tmdbId)
+        val body = if (mediaType == MediaType.MOVIE) {
+            TraktWatchlistBody(movies = listOf(TraktMovieId(ids)))
+        } else {
+            TraktWatchlistBody(shows = listOf(TraktShowId(ids)))
+        }
+        return try {
+            val response = if (add) {
+                traktApi.addToMyList(auth = auth, clientId = clientId, listId = listId, body = body)
+            } else {
+                traktApi.removeFromMyList(auth = auth, clientId = clientId, listId = listId, body = body)
+            }
+            listChangeAccepted(response, mediaType, add).also { accepted ->
+                if (!accepted) {
+                    AppLogger.w("TraktRepository", "Personal list ${if (add) "add" else "remove"} not applied: $response")
+                }
+            }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            AppLogger.e("TraktRepository", "Personal list ${if (add) "add" else "remove"} failed: ${error.message}")
+            false
+        }
+    }
+
     suspend fun getPersonalListItems(listId: String): List<MediaItem> {
         val auth = getAuthHeader() ?: return emptyList()
 
@@ -3489,7 +3545,7 @@ class TraktRepository @Inject constructor(
     /** Calendar membership needs identities, not per-show progress or artwork hydration. */
     internal suspend fun getCalendarWatchingShows(): List<MediaItem> = coroutineScope {
         val auth = getAuthHeader() ?: return@coroutineScope emptyList()
-        val hidden = async { (getAllHiddenProgressShows(auth) + getAllHiddenProgressResetShows(auth))
+        val hidden = async { (getAllHiddenProgressShows(auth) + getAllDroppedShows(auth))
             .mapNotNull { it.show?.ids?.trakt }.toSet() }
         val shows = mutableListOf<TraktWatchedShow>()
         val seen = mutableSetOf<Int>()

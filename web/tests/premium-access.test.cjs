@@ -4,36 +4,40 @@ const { load, storage } = require('./load.cjs');
 const policy = load('lib/entitlementPolicy.ts');
 const now = Date.parse('2026-09-06T10:00:00Z');
 const trial = { entitled: true, reason: 'trial', expiresAt: new Date(now + 60000).toISOString(), trialAvailable: false };
+const paid = { ...trial, reason: 'subscription', source: 'kofi' };
 
-test('trial time uses the real server deadline and disappears for expired or paid access', () => {
-  assert.equal(policy.trialRemainingLabel(trial, now), 'Trial: 1 minute left');
+test('the retired trial never exposes a countdown or paid access', () => {
+  assert.equal(policy.trialRemainingLabel(trial, now), null);
   assert.equal(policy.trialRemainingLabel(trial, now + 60000), null);
   assert.equal(policy.trialRemainingLabel({ ...trial, reason: 'subscription' }, now), null);
   assert.equal(policy.trialRemainingLabel({ ...trial, expiresAt: 'bad' }, now), null);
-  assert.equal(policy.trialRemainingLabel({ ...trial, expiresAt: new Date(now + 72 * 3600000).toISOString() }, now), 'Trial: 3 days left');
-  assert.equal(policy.trialRemainingLabel({ ...trial, expiresAt: new Date(now + 2 * 3600000).toISOString() }, now), 'Trial: 2 hours left');
+  assert.equal(policy.trialRemainingLabel({ ...trial, expiresAt: new Date(now + 72 * 3600000).toISOString() }, now), null);
+  assert.equal(policy.trialRemainingLabel({ ...trial, expiresAt: new Date(now + 2 * 3600000).toISOString() }, now), null);
+  for (const record of [trial, { ...trial, expiresAt: null }, { ...paid, source: 'trial' }, { ...paid, reason: 'trial' }]) {
+    assert.equal(policy.currentEntitlement(record, now).entitled, false);
+  }
 });
 
-test('trial expiry is enforced without reloading the app', () => {
-  assert.equal(policy.currentEntitlement(trial, now).entitled, true);
-  const expired = policy.currentEntitlement(trial, now + 60000);
+test('paid membership expiry is enforced without reloading the app', () => {
+  assert.equal(policy.currentEntitlement(paid, now).entitled, true);
+  const expired = policy.currentEntitlement(paid, now + 60000);
   assert.equal(expired.entitled, false);
   assert.equal(expired.reason, 'expired');
-  assert.equal(policy.entitlementCheckDelay(trial, now), 60100);
+  assert.equal(policy.entitlementCheckDelay(paid, now), 60100);
 });
 test('expired, corrupt and long subscription deadlines cannot overflow timers', () => {
-  assert.equal(policy.entitlementCheckDelay(trial, now + 60000), 1000);
-  assert.equal(policy.currentEntitlement({ ...trial, expiresAt: 'broken' }, now).entitled, false);
-  assert.equal(policy.entitlementCheckDelay({ ...trial, expiresAt: '2099-01-01' }, now), 900000);
-  assert.equal(policy.currentEntitlement({ ...trial, reason: 'subscription', expiresAt: null }, now).entitled, true);
+  assert.equal(policy.entitlementCheckDelay(paid, now + 60000), 1000);
+  assert.equal(policy.currentEntitlement({ ...paid, expiresAt: 'broken' }, now).entitled, false);
+  assert.equal(policy.entitlementCheckDelay({ ...paid, expiresAt: '2099-01-01' }, now), 900000);
+  assert.equal(policy.currentEntitlement({ ...paid, expiresAt: null }, now).entitled, true);
   assert.equal(policy.entitlementCheckDelay(null, now), null);
 });
 function entitlement(disk, request) {
   return load('lib/entitlement.ts', { './storage': disk, './entitlementPolicy': policy, './config': { config: { netlifyBackendUrl: 'https://backend.invalid' } }, './http': { jsonRequest: request, HttpError: class extends Error {} } });
 }
-test('cached trials cannot grant access beyond their server expiry', () => {
+test('cached trials cannot grant access even before their original expiry', () => {
   const disk = storage();
-  disk.saveStored('arvio.web.entitlement.v2:a', { at: Date.now(), state: { ...trial, expiresAt: '2000-01-01' } });
+  disk.saveStored('arvio.web.entitlement.v2:a', { at: Date.now(), state: { ...trial, expiresAt: '2099-01-01' } });
   assert.equal(entitlement(disk).cachedEntitlement({ session: { userId: 'a' } }).entitled, false);
 });
 test('late entitlement response cannot populate the next account cache', async () => {

@@ -61,6 +61,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.layout.size
@@ -78,6 +80,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -2257,6 +2260,12 @@ fun LiveTvScreen(
     var quickZapOpen by remember { mutableStateOf(false) }
     var variantPickerChannel by remember { mutableStateOf<EnrichedChannel?>(null) }
     var sourcesChannel by remember { mutableStateOf<EnrichedChannel?>(null) }
+    // Subtitle choices made on a channel this session, by channel id ("off" or a language).
+    val liveSubtitleChoices = remember { mutableStateMapOf<String, String>() }
+    var subtitlePickerOpen by remember { mutableStateOf(false) }
+    // Audio choices made on a channel this session, by channel id (a language or track key).
+    val liveAudioChoices = remember { mutableStateMapOf<String, String>() }
+    var audioPickerOpen by remember { mutableStateOf(false) }
     var sourcesLoading by remember { mutableStateOf(false) }
     var sourcesFailed by remember { mutableStateOf(false) }
     var sourcesVariants by remember { mutableStateOf<List<EnrichedChannel>>(emptyList()) }
@@ -2354,16 +2363,29 @@ fun LiveTvScreen(
     // Bumped to dismiss the HUD from outside, so Back can close it without
     // leaving fullscreen.
     var hudHideSignal by remember { mutableStateOf(0) }
+    // Bumped when the subtitle or audio list closes, so focus returns to the HUD button row.
+    var hudRefocusSignal by remember { mutableStateOf(0) }
     // The HUD shows itself for a few seconds after a zap, but only OK hands it
     // the focus. While it is not engaged the arrow keys stay with playback.
     var hudEngaged by remember { mutableStateOf(false) }
     var lastZapAtMs by remember { mutableLongStateOf(0L) }
 
+    // A subtitle or audio list is opened from the engaged controls; closing it goes back to
+    // them, with focus on the button that opened it, even if the HUD timed out meanwhile.
+    fun returnToHudControls() {
+        hudEngaged = true
+        hudPokeSignal++
+        hudRefocusSignal++
+    }
+
     // Dismissing the controls takes the focused button out of composition, so
     // hand the focus back to the playback surface — otherwise the next key
-    // press lands nowhere and the remote looks dead.
+    // press lands nowhere and the remote looks dead. An open subtitle or audio list keeps the
+    // focus: the HUD timing out behind it must not hand the arrows back to channel zapping.
     LaunchedEffect(isHudVisible) {
-        if (!isHudVisible && isFullScreen && !fullscreenGuideOpen && !quickZapOpen) {
+        if (!isHudVisible && isFullScreen && !fullscreenGuideOpen && !quickZapOpen &&
+            !subtitlePickerOpen && !audioPickerOpen
+        ) {
             runCatching { fsFocus.requestFocus() }
         }
     }
@@ -3072,6 +3094,9 @@ fun LiveTvScreen(
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(loadControl)
+            // A live stream whose buffer stops moving while buffering raises an error after
+            // this long, which the retry below recovers, instead of a spinner for ten minutes.
+            .setStuckBufferingDetectionTimeoutMs(LIVE_STUCK_BUFFERING_TIMEOUT_MS)
             .build().apply {
                 playWhenReady = true
                 videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
@@ -3086,6 +3111,46 @@ fun LiveTvScreen(
     }
 
     var playbackQuality by remember(exoPlayer) { mutableStateOf<LivePlaybackQuality?>(null) }
+
+    // Subtitles: start every channel on the profile's default subtitle language; a choice made in
+    // the subtitle list overrides that for its channel. Without this the player only turned
+    // subtitles on when the device's system captions matched, so they showed on some TVs only.
+    var liveTracks by remember(exoPlayer) { mutableStateOf(exoPlayer.currentTracks) }
+    var subtitleDefault by remember { mutableStateOf<LiveSubtitleDefault>(LiveSubtitleDefault.Off) }
+    var preferredAudioLanguage by remember { mutableStateOf<String?>(null) }
+    val latestPlayingChannelId by rememberUpdatedState(playingChannelId)
+    LaunchedEffect(exoPlayer) {
+        subtitleDefault = viewModel.liveSubtitleDefault()
+        resetLiveSubtitleChoice(exoPlayer, subtitleDefault)
+        preferredAudioLanguage = viewModel.preferredAudioLanguage()
+        resetLiveAudioChoice(exoPlayer, preferredAudioLanguage)
+    }
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                if (latestPlayingChannelId?.let { liveSubtitleChoices[it] } == null) {
+                    resetLiveSubtitleChoice(exoPlayer, subtitleDefault)
+                }
+                if (latestPlayingChannelId?.let { liveAudioChoices[it] } == null) {
+                    resetLiveAudioChoice(exoPlayer, preferredAudioLanguage)
+                }
+            }
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                liveTracks = tracks
+                val channelId = latestPlayingChannelId ?: return
+                liveAudioChoices[channelId]?.let { wanted ->
+                    val current = liveAudioOptions(tracks).firstOrNull { it.selected }?.key
+                    if (current != wanted) applyLiveAudioChoice(exoPlayer, wanted)
+                }
+                liveSubtitleChoices[channelId]?.let { wanted ->
+                    val current = liveSubtitleOptions(tracks, "").firstOrNull { it.selected }?.key
+                    if (current != wanted) applyLiveSubtitleChoice(exoPlayer, wanted)
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose { exoPlayer.removeListener(listener) }
+    }
 
     var streamStats by remember(exoPlayer) { mutableStateOf(LiveStreamTechInfo()) }
     DisposableEffect(exoPlayer) {
@@ -3271,6 +3336,7 @@ fun LiveTvScreen(
         // and channels without IDR frames need iptvHlsExtractorFactory() to show video.
         val source = if (isHls) {
             HlsMediaSource.Factory(sourceDataFactory)
+                .setAllowChunklessPreparation(IPTV_HLS_CHUNKLESS_PREPARATION)
                 .setExtractorFactory(iptvHlsExtractorFactory())
                 .setLoadErrorHandlingPolicy(IptvLoadErrorHandlingPolicy())
                 .createMediaSource(mediaItem)
@@ -3499,6 +3565,9 @@ fun LiveTvScreen(
     ) {
         var retryJob: Job? = null
         val liveWindowRecovery = LiveWindowRecovery(android.os.SystemClock::elapsedRealtime)
+        val stallRecovery = LiveWindowRecovery(android.os.SystemClock::elapsedRealtime)
+        val usageListener = com.arflix.tv.util.UsageAnalytics.playbackListener(live = true)
+        exoPlayer.addListener(usageListener)
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 playerIsBuffering = (playbackState == Player.STATE_BUFFERING)
@@ -3542,6 +3611,17 @@ fun LiveTvScreen(
                     exoPlayer.prepare()
                     exoPlayer.playWhenReady = true
                     System.err.println("[IPTV] Recovered expired live window at default live position")
+                    return
+                }
+                if (error.isStuckBuffering() && stallRecovery.claim(isCatchup = playingCatchupProgram != null)) {
+                    // A stalled live stream (buffer full, playback never resuming) gets a fresh
+                    // start at the live edge, at most once a minute and outside the retry budget,
+                    // so a long session can recover from more than three stalls.
+                    retryJob?.cancel()
+                    System.err.println("[IPTV] Live playback stalled; restarting the stream")
+                    prepareStream(prepared, isHls = lastPreparedIsHls, headers = lastPreparedHeaders, resetRetry = false,
+                        drmInfo = playingChannel?.source?.drmInfo, forcePrepare = true,
+                        resolvedMimeType = lastPreparedMimeType)
                     return
                 }
                 val preparedIsHls = lastPreparedIsHls
@@ -3645,6 +3725,7 @@ fun LiveTvScreen(
         onDispose {
             retryJob?.cancel()
             exoPlayer.removeListener(listener)
+            exoPlayer.removeListener(usageListener)
         }
     }
 
@@ -4592,6 +4673,10 @@ fun LiveTvScreen(
                             null
                         },
                         onGuideClick = { openFullscreenGuide() },
+                        onSubtitlesClick = { subtitlePickerOpen = true }
+                            .takeIf { liveSubtitleOptions(liveTracks, "").size > 1 },
+                        onAudioClick = { audioPickerOpen = true }
+                            .takeIf { liveAudioOptions(liveTracks).size > 1 },
                         onOpenVariants = playingChannel?.takeIf { playingCatchupProgram == null }?.let { channel ->
                             {
                                 sourcesLoading = true
@@ -4671,6 +4756,7 @@ fun LiveTvScreen(
                             if (!visible) hudEngaged = false
                         },
                         hideSignal = hudHideSignal,
+                        refocusSignal = hudRefocusSignal,
                         // On a remote the controls wait for OK; on a touch device
                         // a tap is the only way to reach them, so they stay part
                         // of what a tap brings up, exactly as before.
@@ -4751,10 +4837,13 @@ fun LiveTvScreen(
             }
         }
 
-            LaunchedEffect(isFullScreen, fullscreenGuideOpen, quickZapOpen, playingCatchupProgram) {
-                if (isFullScreen && !fullscreenGuideOpen && !quickZapOpen) {
+            LaunchedEffect(isFullScreen, fullscreenGuideOpen, quickZapOpen, playingCatchupProgram, subtitlePickerOpen, audioPickerOpen) {
+                if (isFullScreen && !fullscreenGuideOpen && !quickZapOpen && !subtitlePickerOpen && !audioPickerOpen) {
                     delay(50L)
-                    runCatching { fsFocus.requestFocus() }
+                    // With the controls engaged the HUD places focus in its button row (it sits
+                    // inside this box, so the keys above still reach it); taking focus back here
+                    // left the row on screen but unreachable with left/right.
+                    if (!hudEngaged || isTouchDevice) runCatching { fsFocus.requestFocus() }
                 }
             }
         }
@@ -4820,6 +4909,40 @@ fun LiveTvScreen(
                     }
                     if (!useTouchRail) categoryDrawerOpen = false
                     focusChannelList(channel.id)
+                },
+            )
+        }
+
+        if (!searchOpen && isFullScreen && subtitlePickerOpen) {
+            LiveTrackPickerOverlay(
+                title = stringResource(R.string.live_subtitles),
+                icon = Icons.Filled.Subtitles,
+                channelName = playingChannel?.name.orEmpty(),
+                options = liveSubtitleOptions(liveTracks, stringResource(R.string.live_subtitles_off)),
+                onDismiss = {
+                    subtitlePickerOpen = false
+                    returnToHudControls()
+                },
+                onPick = { key ->
+                    playingChannelId?.let { liveSubtitleChoices[it] = key }
+                    applyLiveSubtitleChoice(exoPlayer, key)
+                },
+            )
+        }
+
+        if (!searchOpen && isFullScreen && audioPickerOpen) {
+            LiveTrackPickerOverlay(
+                title = stringResource(R.string.live_audio),
+                icon = Icons.Filled.Audiotrack,
+                channelName = playingChannel?.name.orEmpty(),
+                options = liveAudioOptions(liveTracks),
+                onDismiss = {
+                    audioPickerOpen = false
+                    returnToHudControls()
+                },
+                onPick = { key ->
+                    playingChannelId?.let { liveAudioChoices[it] = key }
+                    applyLiveAudioChoice(exoPlayer, key)
                 },
             )
         }

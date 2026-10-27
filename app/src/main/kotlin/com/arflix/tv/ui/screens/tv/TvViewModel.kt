@@ -130,6 +130,23 @@ class TvViewModel @Inject constructor(
 ) : ViewModel() {
 
     suspend fun loadSportsGuideArtwork() = sportsRepository.loadGuideArtwork()
+
+    /** The profile's "Default audio language" setting for live channels, or null for "Auto". */
+    suspend fun preferredAudioLanguage(): String? = runCatching {
+        val prefs = context.settingsDataStore.data.first()
+        com.arflix.tv.ui.screens.tv.live.audioPreferenceLanguage(
+            prefs[profileManager.profileStringKey("default_audio_language")]
+        )
+    }.getOrNull()
+
+    /** The profile's "Default subtitle" setting for live channels (off when it cannot be read). */
+    internal suspend fun liveSubtitleDefault(): com.arflix.tv.ui.screens.tv.live.LiveSubtitleDefault = runCatching {
+        val prefs = context.settingsDataStore.data.first()
+        com.arflix.tv.ui.screens.tv.live.liveSubtitleDefault(
+            prefs[profileManager.profileStringKey("default_subtitle")]
+        )
+    }.getOrDefault(com.arflix.tv.ui.screens.tv.live.LiveSubtitleDefault.Off)
+
     suspend fun cachedSportsMetadata() = sportsRepository.cachedMetadata()
     internal var cachedSportsSchedule: com.arflix.tv.ui.screens.tv.live.SportsScheduleSnapshot? = null
     private var sportsBroadcasterIndexLoad: Pair<SportsBroadcasterIndexKey, Deferred<SportsBroadcasterIndex>>? = null
@@ -869,6 +886,10 @@ class TvViewModel @Inject constructor(
         return try { iptvRepository.pagedChannelStoreCount() > LargeIptvListChannelCount } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; false }
     }
 
+    /** An XMLTV guide from settings, an Xtream login, or the playlist's own `url-tvg` line. */
+    private fun hasXmltvGuide(config: IptvConfig): Boolean =
+        LiveTvGuideSources.hasXmltvSource(config, iptvRepository.playlistDeclaredEpgUrls())
+
     /**
      * Resolve a channel by id without scanning the full snapshot list. For large
      * playlists a `firstOrNull` over 50k+ channels ran per focus change on the main
@@ -956,7 +977,7 @@ class TvViewModel @Inject constructor(
         iptvRepository.setLiveTvInteractive(active)
         // Bounded XMLTV batches can continue in the background. Keep unbounded
         // per-channel API sweeps deferred while the video decoder is active.
-        if (active && !(isActiveLargeIptvList() && LiveTvGuideSources.hasXmltvSource(_uiState.value.config))) {
+        if (active && !(isActiveLargeIptvList() && hasXmltvGuide(_uiState.value.config))) {
             deferredCompleteEpgBackfillJob?.cancel()
             deferredCompleteEpgBackfillJob = null
             if (completeEpgBackfillJob?.isActive == true) {
@@ -1140,7 +1161,7 @@ class TvViewModel @Inject constructor(
         // Stalker uses its own channel IDs instead of M3U/Xtream identity fields.
         if (!force && !largeList && channels.none { channel ->
                 !channel.epgId.isNullOrBlank() || !channel.tvgName.isNullOrBlank() ||
-                    (LiveTvGuideSources.hasXmltvSource(state.config) && channel.name.isNotBlank()) ||
+                    (hasXmltvGuide(state.config) && channel.name.isNotBlank()) ||
                     StalkerPortalSupport.portalIdFromChannelId(channel.id) != null
             }
         ) {
@@ -1151,7 +1172,7 @@ class TvViewModel @Inject constructor(
             )
             return
         }
-        val streamingXmlBackfill = largeList && LiveTvGuideSources.hasXmltvSource(state.config)
+        val streamingXmlBackfill = largeList && hasXmltvGuide(state.config)
         if (!force && streamingXmlBackfill && iptvRepository.completedFullGuideAgeMs() < 6 * 60 * 60_000L) {
             setEpgBackfillInProgress(false)
             return
@@ -1162,7 +1183,7 @@ class TvViewModel @Inject constructor(
         }
         // Large-list XMLTV is streamed into bounded database batches. Do not turn
         // a missing XMLTV feed into tens of thousands of per-channel API calls.
-        if (largeList && !LiveTvGuideSources.hasXmltvSource(state.config)) {
+        if (largeList && !hasXmltvGuide(state.config)) {
             setEpgBackfillInProgress(false)
             System.err.println("[EPG-Complete] Skipping on-device full guide backfill for large playlist; visible guide loads on demand")
             return

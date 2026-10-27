@@ -56,7 +56,7 @@ class CollectionDetailsLoadingTest {
             page((1..4).map(::item))
         coEvery { media.getMovieDetails(any()) } answers { item(firstArg()).copy(duration = "2h", imdbRating = "8.1") }
         coEvery { media.getTvDetails(any()) } answers { item(firstArg()).copy(mediaType = MediaType.TV, duration = "45m") }
-        model = CollectionDetailsViewModel(catalogs, media, sports)
+        model = CollectionDetailsViewModel(catalogs, media, sports, mockk(relaxed = true))
         store.put("collection", model)
     }
 

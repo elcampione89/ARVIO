@@ -4,6 +4,13 @@
 
 This release includes the changes since **2.0.1** across Android TV, phones, tablets and the web app.
 
+## GitHub APK hotfix (build 320)
+
+- SIMKL playback sync now checks activity timestamps before downloading progress, including forced refreshes. Unchanged playback data is reused instead of fetched every 15 minutes.
+- Use `date_from` checkpoints for playback updates, retain them across app restarts and reconcile cleared sessions without losing older unfinished titles. Failed requests preserve the previous checkpoint for a safe retry.
+- The web app uses the same activity-gated playback caching and shares concurrent requests.
+- The replacement APK is still version 2.2, signed with the existing release key. The Google Play submission remains build 319; this hotfix replaces the GitHub download only.
+
 ## Release Calendar
 
 - New Calendar tab in Library on Android and web, with artwork, movie releases and episode schedules from your ARVIO watchlist and connected Trakt, SIMKL and MDBList accounts.

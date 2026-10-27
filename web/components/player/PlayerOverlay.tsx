@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLivePlayerDock } from "./useLivePlayerDock";
+import { YouTubeEmbed } from "./YouTubeEmbed";
 import { usePlayerEpisodeMetadata } from "./usePlayerEpisodeMetadata";
 import { config } from "@/lib/config";
 import { createPendingExternalPlayback } from "@/lib/externalPlayback";
@@ -213,19 +214,12 @@ export function PlayerOverlay() {
   if (ytId) {
     return (
       <section className="player-overlay youtube-player-layout">
-        <iframe
-          className="player-youtube"
-          src={`https://www.youtube-nocookie.com/embed/${ytId}?autoplay=1&playsinline=1`}
-          title={title}
-          referrerPolicy="strict-origin-when-cross-origin"
-          allow="autoplay; encrypted-media; fullscreen"
-          allowFullScreen
-        />
+        <YouTubeEmbed videoId={ytId} item={selected} stream={activeStream} />
         <div className="youtube-player-toolbar">
           <div className="player-top-left">
             <button type="button" className="player-icon-btn" onClick={closePlayer} aria-label={translateUi("Back")}><ArrowLeft size={24} /></button>
             <div>
-              <p className="eyebrow">{translateUi("Trailer")}</p>
+              <p className="eyebrow">{activeStream.addonId === "arvio_youtube" ? "YouTube" : translateUi("Trailer")}</p>
               <h2>{title}</h2>
             </div>
           </div>

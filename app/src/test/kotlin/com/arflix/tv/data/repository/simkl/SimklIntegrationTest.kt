@@ -35,6 +35,7 @@ class SimklIntegrationTest {
     private lateinit var scrobbler: SimklScrobbler
     private lateinit var syncService: SimklSyncService
     private lateinit var tmdbApi: TmdbApi
+    private var elapsedMs = 1_000_000L
 
     private fun emptyLibraryPayload(): JsonElement = Gson().toJsonTree(SimklAllItemsResponse())
 
@@ -56,6 +57,7 @@ class SimklIntegrationTest {
         for (id in listOf(440, 777)) coEvery { tmdbApi.getTvSeason(id, 1, any(), any()) } returns com.arflix.tv.data.api.TmdbSeasonDetails(
             seasonNumber = 1, episodes = listOf(com.arflix.tv.data.api.TmdbEpisode(episodeNumber = 2, seasonNumber = 1, airDate = "2025-01-01")))
         syncService = SimklSyncService(simklApi, authManager, tmdbApi, syncProviderStore, context = null)
+        syncService.elapsedRealtimeMs = { elapsedMs }
     }
 
     @Test
@@ -519,6 +521,7 @@ class SimklIntegrationTest {
         syncService.syncIfNeeded(force = true)
 
         // Delta sync on activities change
+        elapsedMs += SimklSyncService.MIN_ACTIVITY_CHECK_INTERVAL_MS
         syncService.syncIfNeeded(force = true)
 
         coVerify(exactly = 1) {

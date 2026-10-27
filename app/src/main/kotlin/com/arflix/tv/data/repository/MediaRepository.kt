@@ -480,6 +480,10 @@ class MediaRepository @Inject constructor(
     /** True for a native addon item (see [AddonNativeCatalog]). */
     fun isAddonNative(mediaId: Int): Boolean = mediaId < 0 && addonNative.isNative(mediaId)
 
+    /** A native addon item's own catalog card (with its artwork), never a copy cached from elsewhere. */
+    fun addonNativeCard(type: MediaType, mediaId: Int): MediaItem? =
+        if (mediaId < 0) addonNative.card(type, mediaId) else null
+
     /** A native addon item's own type, for stream lookup; null for TMDB items. */
     fun addonNativeType(mediaId: Int): String? = if (mediaId < 0) addonNative.addonType(mediaId) else null
 
@@ -492,6 +496,19 @@ class MediaRepository @Inject constructor(
         mediaId < 0 -> addonNative.card(type, mediaId)
         type == MediaType.MOVIE -> getMovieDetails(mediaId)
         else -> getTvDetails(mediaId)
+    }
+
+    suspend fun getImdbRating(item: MediaItem): String? {
+        item.imdbRating.takeIf { value ->
+            value.toDoubleOrNull()?.let { it.isFinite() && it > 0 && it <= 10 } == true
+        }?.let { return it }
+        val imdbId = item.homeServerImdbId?.trim()
+            ?.takeIf { it.startsWith("tt", ignoreCase = true) }
+        if (item.id > 0 || imdbId != null) return getImdbRating(item.mediaType, item.id, imdbId)
+        if (!item.isHomeServer) return null
+        // Reuse the server title's resolved identity, never its unlabelled community score.
+        val resolved = resolveHomeServerLogoRef(item) ?: return null
+        return getImdbRating(resolved.first, resolved.second)
     }
 
     suspend fun getImdbRating(mediaType: MediaType, mediaId: Int, imdbId: String? = null): String? {
@@ -987,6 +1004,10 @@ class MediaRepository @Inject constructor(
             val page = loadHomeServerCatalogPage(catalog, offset = 0, limit = effectiveMaxItems)
             return@coroutineScope if (page.items.isEmpty()) null else Category(catalog.id, catalog.title, page.items)
         }
+        if (catalog.sourceType == CatalogSourceType.YOUTUBE) {
+            val items = youTubeCatalogItems(catalog).take(effectiveMaxItems)
+            return@coroutineScope if (items.isEmpty()) null else Category(catalog.id, catalog.title, items)
+        }
         val mediaRefs = when (catalog.sourceType) {
             CatalogSourceType.TRAKT -> loadTraktCatalogRefs(catalog.sourceUrl, catalog.sourceRef)
             CatalogSourceType.SIMKL -> loadSimklCatalogRefs(catalog, effectiveMaxItems)
@@ -995,6 +1016,7 @@ class MediaRepository @Inject constructor(
             CatalogSourceType.ADDON -> loadAddonCatalogRefsPage(catalog, offset = 0, limit = effectiveMaxItems).refs
             CatalogSourceType.PREINSTALLED -> emptyList()
             CatalogSourceType.HOME_SERVER -> emptyList()
+            CatalogSourceType.YOUTUBE -> emptyList()
         }
         if (mediaRefs.isEmpty()) return@coroutineScope null
 
@@ -1035,6 +1057,14 @@ class MediaRepository @Inject constructor(
         var sourceNextOffset: Int? = null
         if (catalog.sourceType == CatalogSourceType.HOME_SERVER) {
             return@coroutineScope loadHomeServerCatalogPage(catalog, offset, effectiveLimit)
+        } else if (catalog.sourceType == CatalogSourceType.YOUTUBE) {
+            val all = youTubeCatalogItems(catalog)
+            val items = all.drop(offset).take(effectiveLimit)
+            return@coroutineScope CategoryPageResult(
+                items = items,
+                hasMore = offset + items.size < all.size,
+                nextOffset = offset + items.size
+            )
         } else if (catalog.sourceType == CatalogSourceType.ADDON) {
             val page = loadAddonCatalogRefsPage(catalog, offset, effectiveLimit)
             pageRefs = page.refs
@@ -1049,6 +1079,7 @@ class MediaRepository @Inject constructor(
                 CatalogSourceType.ADDON -> emptyList()
                 CatalogSourceType.PREINSTALLED -> emptyList()
                 CatalogSourceType.HOME_SERVER -> emptyList()
+                CatalogSourceType.YOUTUBE -> emptyList()
             }.distinct()
 
             if (mediaRefs.isEmpty()) return@coroutineScope CategoryPageResult(emptyList(), hasMore = false)
@@ -1078,6 +1109,26 @@ class MediaRepository @Inject constructor(
             hasMore = hasMore,
             nextOffset = sourceNextOffset ?: (offset + pageRefs.size)
         )
+    }
+
+    /** The videos of the user's YouTube row (see [YouTubeCollection]), as native addon items, in the user's order. */
+    private suspend fun youTubeCatalogItems(catalog: CatalogConfig): List<MediaItem> {
+        val items = YouTubeCollection.decode(catalog.sourceRef).mapNotNull { video ->
+            addonNative.register(
+                addonId = YouTubeCollection.ADDON_ID,
+                preview = StremioMetaPreview(
+                    id = YouTubeCollection.metaId(video.id),
+                    name = video.title,
+                    poster = YouTubeCollection.posterUrl(video.id),
+                    background = YouTubeCollection.backdropUrl(video.id)
+                ),
+                mediaType = MediaType.MOVIE,
+                addonType = "movie"
+            )
+        }
+        addonNative.flush()
+        if (items.isNotEmpty()) cacheItems(items)
+        return items
     }
 
     private suspend fun loadHomeServerCatalogPage(
@@ -2417,13 +2468,22 @@ class MediaRepository @Inject constructor(
         episodeNumber: Int,
         language: String = contentLanguage
     ): String? {
+        return getLightweightEpisode(tvId, seasonNumber, episodeNumber, language)?.name
+    }
+
+    internal suspend fun getLightweightEpisode(
+        tvId: Int,
+        seasonNumber: Int,
+        episodeNumber: Int,
+        language: String = contentLanguage
+    ): TmdbEpisode? {
         return runCatching {
             tmdbApi.getTvSeason(
                 tvId = tvId,
                 seasonNumber = seasonNumber,
                 apiKey = apiKey,
                 language = language
-            ).episodes.firstOrNull { it.episodeNumber == episodeNumber }?.name
+            ).episodes.firstOrNull { it.episodeNumber == episodeNumber }
         }.getOrNull()
     }
 
@@ -2782,6 +2842,13 @@ class MediaRepository @Inject constructor(
      * Get trailer key (YouTube)
      */
     suspend fun getTrailerKey(mediaType: MediaType, mediaId: Int): String? {
+        // A YouTube collection video previews as itself; other native items have no TMDB trailer.
+        if (mediaId < 0) {
+            val card = addonNative.card(mediaType, mediaId) ?: return null
+            return if (card.addonNativeAddonId == YouTubeCollection.ADDON_ID) {
+                YouTubeCollection.videoIdFromMetaId(card.addonNativeId)
+            } else null
+        }
         val type = if (mediaType == MediaType.TV) "tv" else "movie"
         return try {
             val videos = tmdbApi.getVideos(type, mediaId, apiKey, language = contentLanguage)
@@ -2797,10 +2864,7 @@ class MediaRepository @Inject constructor(
             ) {
                 results = tmdbApi.getVideos(type, mediaId, apiKey, language = "en-US").results
             }
-            val trailer = results.find { it.type == "Trailer" && it.site == "YouTube" && it.official }
-                ?: results.find { it.type == "Trailer" && it.site == "YouTube" }
-                ?: results.find { it.type == "Teaser" && it.site == "YouTube" }
-                ?: results.find { it.site == "YouTube" }
+            val trailer = com.arflix.tv.data.api.preferredTrailer(results)
             trailer?.key
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e

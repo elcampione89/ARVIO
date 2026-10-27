@@ -22,6 +22,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.arflix.tv.ui.components.KidsNavigation
+import androidx.compose.runtime.SideEffect
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -93,8 +95,8 @@ sealed class Screen(val route: String) {
     data object Tv : Screen("tv?channelId={channelId}&streamUrl={streamUrl}") {
         fun createRoute(channelId: String? = null, streamUrl: String? = null): String {
             if (channelId == null) return "tv"
-            val enc = java.net.URLEncoder.encode(channelId, "UTF-8")
-            val streamEnc = streamUrl?.let { java.net.URLEncoder.encode(it, "UTF-8") }
+            val enc = android.net.Uri.encode(channelId)
+            val streamEnc = streamUrl?.let { android.net.Uri.encode(it) }
             return if (streamEnc != null) "tv?channelId=$enc&streamUrl=$streamEnc" else "tv?channelId=$enc"
         }
     }
@@ -151,11 +153,11 @@ sealed class Screen(val route: String) {
             tmdbEpisodeNumber?.let { params.add("tmdbEpisodeNumber=$it") }
             kitsuId?.let { params.add("kitsuId=$it") }
             kitsuEpisodeNumber?.let { params.add("kitsuEpisodeNumber=$it") }
-            imdbId?.let { params.add("imdbId=${java.net.URLEncoder.encode(it, "UTF-8")}") }
-            streamUrl?.let { params.add("streamUrl=${java.net.URLEncoder.encode(it, "UTF-8")}") }
-            preferredAddonId?.let { params.add("preferredAddonId=${java.net.URLEncoder.encode(it, "UTF-8")}") }
-            preferredSourceName?.let { params.add("preferredSourceName=${java.net.URLEncoder.encode(it, "UTF-8")}") }
-            preferredBingeGroup?.let { params.add("preferredBingeGroup=${java.net.URLEncoder.encode(it, "UTF-8")}") }
+            imdbId?.let { params.add("imdbId=${android.net.Uri.encode(it)}") }
+            streamUrl?.let { params.add("streamUrl=${android.net.Uri.encode(it)}") }
+            preferredAddonId?.let { params.add("preferredAddonId=${android.net.Uri.encode(it)}") }
+            preferredSourceName?.let { params.add("preferredSourceName=${android.net.Uri.encode(it)}") }
+            preferredBingeGroup?.let { params.add("preferredBingeGroup=${android.net.Uri.encode(it)}") }
             startPositionMs?.let { params.add("startPositionMs=$it") }
             if (isLiveStream) params.add("isLiveStream=true")
             return if (params.isNotEmpty()) "$base?${params.joinToString("&")}" else base
@@ -194,7 +196,11 @@ fun AppNavigation(
 ) {
     // Activity-scoped results survive Home/Library navigation and remain profile-scoped internally.
     val calendarViewModel: ReleaseCalendarViewModel = hiltViewModel()
-    val navigateTopLevel: (String) -> Unit = { route ->
+    // Live TV carries no age ratings: a kids profile loses the tab and every way into it.
+    val isKidsProfile = currentProfile?.isKidsProfile == true
+    SideEffect { KidsNavigation.hideLiveTv = isKidsProfile }
+    val navigateTopLevel: (String) -> Unit = navigate@{ route ->
+        if (isKidsProfile && route.substringBefore('?') == "tv") return@navigate
         navController.navigate(route) {
             popUpTo(Screen.Home.route) { saveState = true }
             launchSingleTop = true
@@ -261,7 +267,14 @@ fun AppNavigation(
                     navController.navigate(Screen.CollectionDetails.createRoute(catalogId))
                 },
                 onNavigateToCategory = { categoryId ->
-                    navController.navigate(Screen.CategoryViewAll.createRoute(categoryId))
+                    if (categoryId == com.arflix.tv.ui.screens.home.HOME_WATCHLIST_ROW_ID) {
+                        // "View all" means this watchlist, not a previously restored server/calendar tab.
+                        navController.navigate(Screen.Watchlist.route) {
+                            popUpTo(Screen.Home.route) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = false
+                        }
+                    } else navController.navigate(Screen.CategoryViewAll.createRoute(categoryId))
                 },
                 onNavigateToSearch = {
                     navigateTopLevel(Screen.Search.route)
@@ -355,6 +368,10 @@ fun AppNavigation(
         ) { backStackEntry ->
             val initialChannelId = backStackEntry.arguments?.getString("channelId")
             val initialStreamUrl = backStackEntry.arguments?.getString("streamUrl")
+            if (isKidsProfile) {
+                LaunchedEffect(Unit) { navigateHome() }
+                return@composable
+            }
             LiveTvScreen(
                 currentProfile = currentProfile,
                 initialChannelId = initialChannelId,

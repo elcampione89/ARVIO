@@ -348,7 +348,8 @@ class StreamRepository @Inject constructor(
     private val homeServerRepository: HomeServerRepository,
     private val invalidationBus: CloudSyncInvalidationBus,
     private val telegramSourceResolver: TelegramSourceResolver,
-    private val streamIntegrationRepository: StreamIntegrationRepository
+    private val streamIntegrationRepository: StreamIntegrationRepository,
+    private val youTubeExtractor: InAppYouTubeExtractor = InAppYouTubeExtractor()
 ) {
     private val gson = Gson()
     private val TAG = "StreamRepository"
@@ -2623,6 +2624,9 @@ class StreamRepository @Inject constructor(
         forceRefresh: Boolean = false,
         nativeType: String? = null
     ): StreamResult = withContext(Dispatchers.IO) {
+        YouTubeCollection.videoIdFromMetaId(imdbId)?.let { videoId ->
+            return@withContext StreamResult(listOf(YouTubeCollection.stream(videoId)), emptyList())
+        }
         ensureAddonHealthLoaded()
         val subtitles = mutableListOf<Subtitle>()
         val allAddons = installedAddonsForSourceResolution()
@@ -2689,6 +2693,13 @@ class StreamRepository @Inject constructor(
         sequential: Boolean = false,
         nativeType: String? = null
     ): Flow<ProgressiveStreamResult> = callbackFlow {
+        // A YouTube collection video has exactly one source and no addon to ask.
+        YouTubeCollection.videoIdFromMetaId(imdbId)?.let { videoId ->
+            trySend(ProgressiveStreamResult(listOf(YouTubeCollection.stream(videoId)), emptyList(), 1, 1, true))
+            close()
+            awaitClose { }
+            return@callbackFlow
+        }
         // Retained so cancelling the collector (back-nav, superseded prefetch)
         // also stops the scrape instead of leaking it in repositoryScope.
         val workerJob = repositoryScope.launch {
@@ -4445,6 +4456,11 @@ class StreamRepository @Inject constructor(
      */
     suspend fun resolveStreamForPlayback(stream: StreamSource): StreamSource? = withContext(Dispatchers.IO) {
         cachedResolvedStream(stream)?.let { return@withContext it }
+        if (YouTubeCollection.isStreamMarker(stream.url)) {
+            return@withContext resolveYouTubeStream(stream)?.also { resolved ->
+                resolvedStreamCache[resolvedStreamCacheKey(stream)] = CachedResolvedStream(resolved, System.currentTimeMillis())
+            }
+        }
         try {
             withTimeout(STREAM_RESOLUTION_TIMEOUT_MS) {
                 resolveStreamInternal(stream)?.also { resolved ->
@@ -4471,6 +4487,17 @@ class StreamRepository @Inject constructor(
             )
             null
         }
+    }
+
+    /**
+     * Exchanges a YouTube collection source for playable tracks, retaining separate audio
+     * when the extractor selects it. Has its own budget: YouTube extraction
+     * routinely takes longer than [STREAM_RESOLUTION_TIMEOUT_MS].
+     */
+    private suspend fun resolveYouTubeStream(stream: StreamSource): StreamSource? {
+        val videoId = YouTubeCollection.videoIdFromStreamMarker(stream.url.orEmpty()) ?: return null
+        val source = youTubeExtractor.extractPlaybackSource(YouTubeCollection.watchUrl(videoId)) ?: return null
+        return YouTubeCollection.resolve(stream, source)
     }
 
     suspend fun prewarmStreamForPlayback(

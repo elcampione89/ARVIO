@@ -39,7 +39,8 @@ class SearchLiveDeviceTest {
         var openedId: Int? = null
         compose.runOnUiThread {
             model = SearchViewModel(repository, access.traktRepository(),
-                RecentSearchRepository(instrumentation.targetContext, access.profileManager()))
+                RecentSearchRepository(instrumentation.targetContext, access.profileManager()),
+                access.kidsContentFilter())
             compose.activity.viewModelStore.put("live-search", model)
         }
         compose.setContent {

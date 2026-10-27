@@ -166,11 +166,14 @@
         timeStr = new Date().toLocaleString();
       }
 
-      const sentryLink = id !== "N/A" ? "https://sentry.io/issues/?query=id%3A" + encodeURIComponent(id) : "N/A";
+      const firebase = params.get("provider") === "firebase";
+      const dashboard = firebase ? "https://console.firebase.google.com/project/arvio-15c5a/crashlytics" :
+        id !== "N/A" ? "https://sentry.io/issues/?query=id%3A" + encodeURIComponent(id) : "N/A";
 
       const reportText = "**🚨 ARVIO Crash Report**\n" +
         "**Crash ID:** `" + id + "`\n" +
-        "**Sentry Link:** " + sentryLink + "\n" +
+        "**" + (firebase ? "Crashlytics" : "Sentry Link") + ":** " + dashboard + "\n" +
+        (firebase ? "**Report reference:** `arvio_report_id=" + id + "`\n" : "") +
         "**Version:** " + version + "\n" +
         "**Time:** " + timeStr + "\n" +
         "**Error:** " + error;

@@ -24,10 +24,14 @@ import com.arflix.tv.data.model.StreamSource
 import com.arflix.tv.data.model.Subtitle
 import com.arflix.tv.data.api.TmdbApi
 import com.arflix.tv.data.api.TraktComment
+import com.arflix.tv.data.repository.YouTubeCollection
 import com.arflix.tv.data.repository.CloudSyncRepository
 import com.arflix.tv.data.repository.ContinueWatchingMerge
 import com.arflix.tv.data.repository.HomeServerRepository
 import com.arflix.tv.data.repository.LauncherContinueWatchingRepository
+import com.arflix.tv.data.repository.PersonalListsRepository
+import com.arflix.tv.ui.components.PersonalListPicker
+import com.arflix.tv.data.repository.KidsContentFilter
 import com.arflix.tv.data.repository.MediaRepository
 import com.arflix.tv.data.repository.MdbExternalRating
 import com.arflix.tv.data.repository.MdbListRepository
@@ -256,8 +260,42 @@ class DetailsViewModel @Inject constructor(
     private val cloudSyncRepository: CloudSyncRepository,
     private val launcherContinueWatchingRepository: LauncherContinueWatchingRepository,
     private val streamIntegrationRepository: StreamIntegrationRepository,
-    private val recentPlayedSourceRepository: RecentPlayedSourceRepository
+    private val recentPlayedSourceRepository: RecentPlayedSourceRepository,
+    personalListsRepository: PersonalListsRepository,
+    private val kidsContentFilter: KidsContentFilter
 ) : ViewModel() {
+
+    /** "Add to list" from the action row; the result shows as a Details toast. */
+    private val personalListPicker = PersonalListPicker(viewModelScope, personalListsRepository, context) { message, ok ->
+        _uiState.value = _uiState.value.copy(
+            toastMessage = message,
+            toastType = if (ok) ToastType.SUCCESS else ToastType.ERROR
+        )
+    }
+    val listPicker: StateFlow<PersonalListPicker.State?> = personalListPicker.state
+
+    suspend fun hasPersonalLists(): Boolean = personalListPicker.isAvailable()
+    fun openListPicker() { _uiState.value.item?.let(personalListPicker::open) }
+    fun toggleListMembership(choice: PersonalListsRepository.Choice) = personalListPicker.toggle(choice)
+    fun closeListPicker() = personalListPicker.close()
+
+    val kidsFilterState: StateFlow<KidsContentFilter.State> = kidsContentFilter.state
+
+    /** Whether the active profile may open this title; always true outside a kids profile. */
+    suspend fun isAllowedForKids(mediaType: MediaType, mediaId: Int): Boolean =
+        kidsContentFilter.isAllowed(mediaType, mediaId)
+
+    /** Rows and filmography as a kids profile may see them; others get [state] unchanged. */
+    fun applyKidsFilter(state: DetailsUiState, kids: KidsContentFilter.State): DetailsUiState {
+        if (!kids.isActive) return state
+        return state.copy(
+            similar = kidsContentFilter.filter(state.similar, kids),
+            collectionItems = kidsContentFilter.filter(state.collectionItems, kids),
+            selectedPerson = state.selectedPerson?.let { person ->
+                person.copy(knownFor = kidsContentFilter.filter(person.knownFor, kids))
+            }
+        )
+    }
 
     companion object {
         private const val TAG = "DetailsViewModel"
@@ -2069,11 +2107,9 @@ class DetailsViewModel @Inject constructor(
         val requestMediaId = currentMediaId
 
         viewModelScope.launch {
-            val recent = recentPlayedSourceRepository.get(requestMediaType, requestMediaId)
-                ?.takeIf {
-                    it.appliesTo(requestMediaType, requestMediaId, identity?.tmdbSeason, identity?.tmdbEpisode)
-                }
-                ?: return@launch
+            val recent = recentPlayedSourceRepository.get(
+                requestMediaType, requestMediaId, identity?.tmdbSeason, identity?.tmdbEpisode
+            ) ?: return@launch
             if (requestId == loadStreamsRequestId) {
                 _uiState.value = _uiState.value.copy(recentSource = recent)
             }
@@ -2140,7 +2176,10 @@ class DetailsViewModel @Inject constructor(
                 val originalLanguage = item?.originalLanguage
                 val canonicalSeason = identity?.tmdbSeason
                 val canonicalEpisode = identity?.tmdbEpisode
-                if (!effectiveStreamId.isNullOrBlank() && streamRepository.isTelegramSearchOnClick()) {
+                // A YouTube collection video has exactly one source (YouTube); Telegram, home
+                // servers, IPTV VOD and plugins would only list unrelated title matches.
+                val isYouTubeVideo = YouTubeCollection.videoIdFromMetaId(effectiveStreamId) != null
+                if (!isYouTubeVideo && !effectiveStreamId.isNullOrBlank() && streamRepository.isTelegramSearchOnClick()) {
                     // The keys the automatic search would use, so both share its cache.
                     telegramSearchRequest = TelegramSearchRequest(
                         requestId = requestId,
@@ -2157,13 +2196,13 @@ class DetailsViewModel @Inject constructor(
                 }
                 val animeQueryOverride = identity?.kitsuQuery
                 val homeServerEnabled = streamIntegrationRepository.isIntegrationEnabled(StreamIntegrationType.HOME_SERVER)
-                val hasHomeServerConnections = homeServerEnabled && streamRepository.hasHomeServerConnections()
+                val hasHomeServerConnections = !isYouTubeVideo && homeServerEnabled && streamRepository.hasHomeServerConnections()
                 // Counted alongside the addons: an IPTV playlist or portal is a
                 // source of streams like any other, and leaving it out told every
                 // user whose only provider is IPTV to go install a streaming addon
                 // whenever a search came back empty. Only while IPTV VOD is switched
                 // on, though - switched off, ARVIO does not search there at all.
-                val vodEnabled = streamIntegrationRepository.isIntegrationEnabled(StreamIntegrationType.IPTV_VOD)
+                val vodEnabled = !isYouTubeVideo && streamIntegrationRepository.isIntegrationEnabled(StreamIntegrationType.IPTV_VOD)
                 val hasIptvVodProviders = vodEnabled && streamRepository.hasIptvVodProviders()
                 if (!isCurrentRequest()) return@launch
                 if (hasHomeServerConnections) {
@@ -2210,7 +2249,7 @@ class DetailsViewModel @Inject constructor(
                 }
 
                 var pluginScraperJob: kotlinx.coroutines.Job? = null
-                val pluginsEnabled = streamIntegrationRepository.isIntegrationEnabled(StreamIntegrationType.PLUGINS)
+                val pluginsEnabled = !isYouTubeVideo && streamIntegrationRepository.isIntegrationEnabled(StreamIntegrationType.PLUGINS)
                 if (pluginsEnabled) {
                     pluginScraperJob = viewModelScope.launch {
                     try {

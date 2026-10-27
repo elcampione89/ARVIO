@@ -55,7 +55,7 @@ function harness(options = {}) {
       if (options.watched) return options.watched(type, feature);
       return type === 'movies' ? [watchedMovie] : [watchedShow];
     } };
-  const tracker = { setProfile() {}, restoreSession: async () => {}, isConnected: true, hiddenProgressShowIds: async () => new Set(), continueWatchingActivity: options.activity ?? (async () => null) };
+  const tracker = { setProfile() {}, restoreSession: async () => {}, isConnected: true, hiddenProgressShowIds: options.hidden ?? (async () => new Set()), continueWatchingActivity: options.activity ?? (async () => null) };
   const noop = () => {};
   const globals = {
     episodeAvailabilityKey: availability.episodeAvailabilityKey,
@@ -103,6 +103,15 @@ test('missing paused episode cannot suppress a valid next episode', async () => 
   assert.deepEqual(h.state.errors, []);
   assert.equal(h.state.cw.length, 1);
   assert.equal(h.state.cw[0].episodeNumber, 6);
+});
+
+test('failed hidden-show read preserves the rendered and saved row instead of clearing it', async () => {
+  const h = harness({ playback: [], watched: async () => [], hidden: async () => { throw Error('offline'); } });
+  const previous = h.state.cw;
+  await h.refresh();
+  assert.deepEqual(h.state.cw, previous);
+  assert.deepEqual(h.cache.get('cw:a'), previous);
+  assert.equal(h.state.categories[0].items.length, previous.length);
 });
 
 test('partial progress failure cannot resurrect a confirmed nonexistent cached episode', async () => {

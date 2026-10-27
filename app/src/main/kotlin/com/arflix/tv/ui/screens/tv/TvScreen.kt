@@ -599,10 +599,10 @@ fun TvScreen(
         OkHttpDataSource.Factory(iptvHttpClient)
             .setUserAgent(OkHttpProvider.getAppUserAgent(context))
     }
-    // HLS factory with chunkless preparation (used when stream is detected as HLS)
+    // HLS factory (used when stream is detected as HLS)
     val iptvHlsFactory = remember(iptvDataSourceFactory) {
         HlsMediaSource.Factory(iptvDataSourceFactory)
-            .setAllowChunklessPreparation(true)
+            .setAllowChunklessPreparation(com.arflix.tv.ui.screens.tv.live.IPTV_HLS_CHUNKLESS_PREPARATION)
             .setExtractorFactory(com.arflix.tv.ui.screens.tv.live.iptvHlsExtractorFactory())
     }
     // Default factory handles all formats (MPEG-TS, HLS, DASH, progressive, etc.)

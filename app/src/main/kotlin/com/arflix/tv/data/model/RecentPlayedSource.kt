@@ -5,7 +5,7 @@ package com.arflix.tv.data.model
  *
  * Only a source that actually played is recorded (see RecentSourcePlayTracker): one the user
  * opened and abandoned, or that failover replaced because it was slow or broken, never is.
- * There is one record per title — playing another source or episode replaces it.
+ * There is one record per movie and per episode — playing another source replaces it.
  *
  * [season]/[episode] are TMDB numbers, null for movies.
  */

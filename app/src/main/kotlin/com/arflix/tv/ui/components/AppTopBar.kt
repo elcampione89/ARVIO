@@ -63,7 +63,10 @@ val AppTopBarHorizontalPadding = 28.dp
 
 // Navigation items that appear CENTERED in the top bar (Search, Home, Watchlist, TV).
 // Settings is NOT in this list — it's rendered as a standalone gear icon on the right.
-private val NAV_ITEMS = SidebarItem.entries.filter { it != SidebarItem.SETTINGS }
+private val ALL_NAV_ITEMS = SidebarItem.entries.filter { it != SidebarItem.SETTINGS }
+private val KIDS_NAV_ITEMS = ALL_NAV_ITEMS.filter { it != SidebarItem.TV }
+private val NAV_ITEMS: List<SidebarItem>
+    get() = if (KidsNavigation.hideLiveTv) KIDS_NAV_ITEMS else ALL_NAV_ITEMS
 
 fun topBarMaxIndex(hasProfile: Boolean): Int {
     // Profile (0 if shown) + nav items + settings gear (last index)

@@ -104,6 +104,20 @@ interface SimklApi {
         @Header("simkl-api-key") clientId: String
     ): List<SimklPlaybackItem>
 
+    @GET("sync/playback")
+    suspend fun getPlaybackDelta(
+        @Header("Authorization") auth: String,
+        @Header("simkl-api-key") clientId: String,
+        @Query("date_from") dateFrom: String
+    ): List<SimklPlaybackItem>
+
+    @GET("sync/playback")
+    suspend fun getPlaybackBefore(
+        @Header("Authorization") auth: String,
+        @Header("simkl-api-key") clientId: String,
+        @Query("date_to") dateTo: String
+    ): List<SimklPlaybackItem>
+
     @HTTP(method = "DELETE", path = "sync/playback/{id}", hasBody = false)
     suspend fun deletePlayback(
         @Header("Authorization") auth: String,

@@ -38,7 +38,7 @@ class RecentSearchTest {
         coEvery { repository.getLogoUrl(any<MediaType>(), any()) } returns null
         coEvery { repository.searchWithPeople("Some Show", any()) } returns MediaSearchResults(listOf(show), emptyList())
         coEvery { repository.searchWithPeople("zzzz", any()) } returns MediaSearchResults(emptyList(), emptyList())
-        model = SearchViewModel(repository, mockk<TraktRepository>(relaxed = true), recent)
+        model = SearchViewModel(repository, mockk<TraktRepository>(relaxed = true), recent, mockk(relaxed = true))
         store.put("search", model)
     }
 

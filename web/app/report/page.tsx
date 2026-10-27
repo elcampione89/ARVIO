@@ -28,11 +28,15 @@ function ReportContent() {
     }
   }, [timeParam]);
 
-  const sentryLink = id !== "N/A" ? `https://sentry.io/issues/?query=id%3A${id}` : "N/A";
+  const firebase = searchParams.get("provider") === "firebase";
+  const dashboard = firebase
+    ? "https://console.firebase.google.com/project/arvio-15c5a/crashlytics"
+    : id !== "N/A" ? `https://sentry.io/issues/?query=id%3A${encodeURIComponent(id)}` : "N/A";
 
   const reportText = `**🚨 ARVIO Crash Report**
 **Crash ID:** \`${id}\`
-**Sentry Link:** ${sentryLink}
+**${firebase ? "Crashlytics" : "Sentry Link"}:** ${dashboard}
+${firebase ? `**Report reference:** \`arvio_report_id=${id}\`` : ""}
 **Version:** ${version}
 **Time:** ${timeStr}
 **Error:** ${error}`;

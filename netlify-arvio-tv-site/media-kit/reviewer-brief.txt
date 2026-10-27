@@ -12,7 +12,7 @@ What it is
 An independent media hub for Android TV, Google TV and Android mobile, with a browser companion. Connect your own Jellyfin, Plex or Emby server; add supported sources and organize discovery rows. ARVIO is not affiliated with those projects. No movies, channels, streaming accounts or third-party subscriptions are included.
 
 Pricing
-The Android app is free. The browser version can be self-hosted for free. Optional managed browser hosting is $2.99/month. Hosting is not an Android feature unlock and cannot guarantee that a source will work. Check the current Premium page for trial and membership terms: https://arvio.tv/premium/
+The Android app is free. The browser version can be self-hosted for free. Optional managed browser hosting is $2.99/month, with access after confirmed Ko-fi payment. Hosting is not an Android feature unlock and cannot guarantee that a source will work. Check the current Premium page for membership terms: https://arvio.tv/premium/
 
 A short demonstration you can record yourself
 1. Install the official Android release on a supported device. Show Home navigation with a remote; do not use an included screenshot as proof of a test on your device.

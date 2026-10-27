@@ -4,6 +4,7 @@ import com.arflix.tv.data.api.*
 import com.arflix.tv.data.repository.sync.SyncProviderStore
 import com.google.gson.JsonParser
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
@@ -15,6 +16,7 @@ class SimklContinueWatchingTest {
     private val store = mockk<SyncProviderStore>(relaxed = true)
     private val tmdb = mockk<TmdbApi>(relaxed = true)
     private val sync = SimklSyncService(api, SimklAuthManager(api, store), tmdb, store)
+        .apply { elapsedRealtimeMs = { 1_000_000L } }
     private val watchedAt = "2026-09-01T12:00:00Z"
 
     @Before fun prepare() {
@@ -150,6 +152,37 @@ class SimklContinueWatchingTest {
         coEvery { tmdb.getTvSeason(200, 1, any(), any()) } throws java.io.IOException("offline")
         try { sync.getContinueWatching(true); fail("Expected failed lookup") }
         catch (_: java.io.IOException) { }
+    }
+
+    @Test fun oneMetadataOutageDoesNotBlockAnotherShowsNextEpisode() = runBlocking {
+        library(next = "S01E02", episodes = listOf(1))
+        coEvery { api.getAllItems(any(), any(), "anime", any(), any(), any(), any(), any(), any()) } returns JsonParser.parseString(
+            """{"anime":[{"status":"watching","show":{"title":"Unavailable metadata","ids":{"tmdb":300}},"next_to_watch":"S01E02"}]}""")
+        coEvery { tmdb.getTvSeason(300, 1, any(), any()) } throws java.io.IOException("offline")
+        val item = sync.getContinueWatching(true).single()
+        assertEquals(200, item.id)
+        assertEquals(2, item.episode)
+        assertTrue(item.isUpNext)
+    }
+
+    @Test fun changedPointerRefreshesSeasonMetadataWithoutRepeatingLibraryBootstrap() = runBlocking {
+        library(next = "S01E02", episodes = listOf(1))
+        coEvery { api.getActivities(any(), any()) } returns SimklActivitiesResponse(
+            movies = SimklActivityGroup(all = watchedAt), shows = SimklActivityGroup(all = watchedAt))
+        coEvery { tmdb.getTvSeason(200, 1, any(), any()) } returns TmdbSeasonDetails(seasonNumber = 1,
+            episodes = (1..2).map { TmdbEpisode(seasonNumber = 1, episodeNumber = it, airDate = "2025-01-01") })
+        assertEquals(2, sync.getContinueWatching(true).single().episode)
+        sync.elapsedRealtimeMs = { 1_061_000L }
+        coEvery { api.getActivities(any(), any()) } returns SimklActivitiesResponse(
+            movies = SimklActivityGroup(all = watchedAt), shows = SimklActivityGroup(all = "2026-09-02T12:00:00Z"))
+        coEvery { api.getAllItemsDelta(any(), any(), any(), any(), any(), any(), any()) } returns JsonParser.parseString(
+            """{"shows":[{"status":"watching","show":{"title":"Show","ids":{"tmdb":200}},"next_to_watch":"S01E03","seasons":[{"number":1,"episodes":[{"number":1},{"number":2}]}]}]}""")
+        coEvery { tmdb.getTvSeason(200, 1, any(), any()) } returns TmdbSeasonDetails(seasonNumber = 1,
+            episodes = (1..3).map { TmdbEpisode(seasonNumber = 1, episodeNumber = it, airDate = "2025-01-01") })
+        assertEquals(3, sync.getContinueWatching(true).single().episode)
+        coVerify(exactly = 2) { tmdb.getTvSeason(200, 1, any(), any()) }
+        coVerify(exactly = 1) { api.getAllItems(any(), any(), "shows", any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 1) { api.getAllItemsDelta(any(), any(), any(), any(), any(), any(), any()) }
     }
 
     @Test fun animeNextPointerUsesMappedSeasonInsteadOfInventingSeasonOne() = runBlocking {

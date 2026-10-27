@@ -74,6 +74,7 @@ import com.arflix.tv.data.model.MediaItem
 import com.arflix.tv.data.model.MediaType
 import com.arflix.tv.data.model.SportsAddonCapabilities
 import com.arflix.tv.data.repository.CatalogRepository
+import com.arflix.tv.data.repository.KidsContentFilter
 import com.arflix.tv.data.repository.MediaRepository
 import com.arflix.tv.data.repository.SportsRepository
 import com.arflix.tv.ui.components.CardLayoutMode
@@ -146,8 +147,22 @@ data class CollectionDetailsUiState(
 class CollectionDetailsViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val mediaRepository: MediaRepository,
-    private val sportsRepository: SportsRepository
+    private val sportsRepository: SportsRepository,
+    private val kidsContentFilter: KidsContentFilter
 ) : ViewModel() {
+    val kidsFilterState: StateFlow<KidsContentFilter.State> = kidsContentFilter.state
+
+    /** The collection as a kids profile may see it; others get [state] unchanged. */
+    fun applyKidsFilter(
+        state: CollectionDetailsUiState,
+        kids: KidsContentFilter.State
+    ): CollectionDetailsUiState {
+        if (!kids.isActive) return state
+        return state.copy(
+            movieItems = kidsContentFilter.filter(state.movieItems, kids),
+            seriesItems = kidsContentFilter.filter(state.seriesItems, kids)
+        )
+    }
     private val _uiState = MutableStateFlow(CollectionDetailsUiState())
     val uiState: StateFlow<CollectionDetailsUiState> = _uiState.asStateFlow()
     private val _cardLogoUrls = MutableStateFlow<Map<String, String>>(emptyMap())
@@ -657,7 +672,11 @@ fun CollectionDetailsScreen(
     onSwitchProfile: () -> Unit = {},
     onBack: () -> Unit
 ) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val rawUiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val kidsFilterState by viewModel.kidsFilterState.collectAsStateWithLifecycle()
+    val uiState = remember(rawUiState, kidsFilterState) {
+        viewModel.applyKidsFilter(rawUiState, kidsFilterState)
+    }
     val cardLogoUrls by viewModel.cardLogoUrls.collectAsStateWithLifecycle()
     val providerLogos by viewModel.providerLogos.collectAsStateWithLifecycle()
     val context = LocalContext.current

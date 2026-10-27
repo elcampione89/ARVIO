@@ -74,7 +74,8 @@ class WatchlistHomeLibraryTest {
         val remote = mockk<RemoteSyncManager>(relaxed = true)
         coEvery { remote.isRemoteConnected(any()) } returns false
         model = WatchlistViewModel(mockk<Context>(relaxed = true), watchlist, cloud, trakt,
-            remote, media, homes, catalogs, history, simkl, mockk(relaxed = true), profiles)
+            remote, media, homes, catalogs, history, simkl, mockk(relaxed = true), profiles,
+            personalLists(), mockk(relaxed = true))
         store.put("library", model)
     }
 
@@ -231,6 +232,30 @@ class WatchlistHomeLibraryTest {
         assertTrue(model.logoUrls.value.containsKey(watchlistLogoKey(slow)))
     }
 
+    @Test fun serverPreviewDoesNotWaitForRatingAndCachesTheRealImdbResult() = runBlocking {
+        val item = MediaItem(42, "Movie", overview = "Server description", isHomeServer = true,
+            homeServerSourceRef = "jellyfin", homeServerItemId = "native-42", tmdbRating = "7.4")
+        coEvery { media.getImdbRating(any<MediaItem>()) } returns "8.1"
+        val preview = model.loadLibraryPreview(item)
+        assertEquals("Server description", preview.item.overview)
+        assertEquals("", preview.item.imdbRating)
+        coVerify(exactly = 0) { media.getImdbRating(any<MediaItem>()) }
+        assertEquals("8.1", model.loadLibraryImdbRating(item))
+        val enriched = model.loadLibraryPreview(item)
+        assertEquals("8.1", enriched.item.imdbRating)
+        assertEquals("native-42", enriched.item.homeServerItemId)
+        assertEquals("Server description", enriched.item.overview)
+    }
+
+    @Test fun missingImdbRatingDoesNotOverwriteTheProviderPreview() = runBlocking {
+        val item = MediaItem(-42, "Movie", overview = "Server description", isHomeServer = true,
+            homeServerSourceRef = "emby", homeServerItemId = "native-42")
+        coEvery { media.getImdbRating(any<MediaItem>()) } returns null
+        model.loadLibraryPreview(item)
+        assertNull(model.loadLibraryImdbRating(item))
+        assertEquals(item, model.loadLibraryPreview(item).item)
+    }
+
     @Test fun trackerShowsAllItemsBeforeSlowArtworkHydration() {
         coEvery { trakt.getPersonalLists() } returns emptyList()
         coEvery { trakt.getWatchlist() } returns (1..605).map { MediaItem(id = it, title = "Movie $it") }
@@ -248,5 +273,11 @@ class WatchlistHomeLibraryTest {
         assertFalse(model.logoUrls.value.containsKey(watchlistLogoKey(item)))
         model.prefetchLogos(listOf(item))
         assertTrue(model.logoUrls.value.containsKey(watchlistLogoKey(item)))
+    }
+
+    // A relaxed mock's `changes` flow completes at once, which the ViewModel's never-ending
+    // collector reports as an uncaught exception; a real (empty) flow behaves like production.
+    private fun personalLists() = mockk<com.arflix.tv.data.repository.PersonalListsRepository>(relaxed = true) {
+        every { changes } returns kotlinx.coroutines.flow.MutableSharedFlow()
     }
 }

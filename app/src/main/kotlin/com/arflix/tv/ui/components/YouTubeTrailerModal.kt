@@ -217,6 +217,13 @@ internal fun TrailerPlayerSurface(
                             onSecondCb(second)
                         }
 
+                        override fun onPlaybackQualityChange(
+                            youTubePlayer: YouTubePlayer,
+                            playbackQuality: PlayerConstants.PlaybackQuality
+                        ) {
+                            android.util.Log.i("TrailerQuality", "YouTube embed $playbackQuality")
+                        }
+
                         override fun onVideoDuration(
                             youTubePlayer: YouTubePlayer,
                             duration: Float
@@ -489,7 +496,7 @@ fun YouTubeTrailerModal(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.94f))
+            .background(Color.Black)
             .zIndex(100f)
             .onPreviewKeyEvent { event ->
                 if (event.key == Key.Back || event.key == Key.Escape) {
@@ -553,10 +560,10 @@ fun YouTubeTrailerModal(
                 }
             }
         } else {
+            // TV: the trailer fills the screen. YouTube's own controls stay reachable (Up),
+            // and Back closes it.
             Column(
-                modifier = Modifier
-                    .fillMaxWidth(0.80f)
-                    .widthIn(max = 1000.dp),
+                modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // No ring around the video, at any focus state. A 3dp gap still
@@ -566,7 +573,7 @@ fun YouTubeTrailerModal(
                 // so "nothing highlighted" means the video has the keys.
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .fillMaxSize()
                         .focusRequester(playerFocusRequester)
                         .focusable()
                         .onPreviewKeyEvent { event ->
@@ -647,7 +654,6 @@ fun YouTubeTrailerModal(
                                     }
                                     Key.DirectionDown -> {
                                         markInteraction()
-                                        runCatching { youtubeFocusRequester.requestFocus() }
                                         true
                                     }
                                     Key.Back, Key.Escape -> {
@@ -668,110 +674,9 @@ fun YouTubeTrailerModal(
                             } else false
                         }
                 ) {
-                    videoSurface(
-                        Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(16f / 9f)
-                    )
+                    videoSurface(Modifier.fillMaxSize())
                 }
 
-                // The strip below the video: reserved permanently, so the video
-                // never resizes. Everything of ours lives in here.
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(tvStripHeight)
-                        .padding(top = 10.dp)
-                ) {
-                    val progress = if (duration > 0f) {
-                        (currentSecond / duration).coerceIn(0f, 1f)
-                    } else {
-                        0f
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(4.dp)
-                            .alpha(barAlpha)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(Color.White.copy(alpha = 0.25f))
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(fraction = progress)
-                                .height(4.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(ArvioSkin.colors.focusOutline)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "${formatTime(currentSecond)} / ${formatTime(duration)}",
-                            style = ArvioSkin.typography.caption.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 12.sp,
-                                color = Color.White.copy(alpha = 0.9f)
-                            ),
-                            modifier = Modifier.alpha(barAlpha)
-                        )
-
-                        // The +/-10s badge used to sit in the middle of the
-                        // video. It lives down here now.
-                        AnimatedVisibility(
-                            visible = transientIndicator != null,
-                            enter = fadeIn(),
-                            exit = fadeOut()
-                        ) {
-                            transientIndicator?.let { ind ->
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = ind.icon,
-                                        contentDescription = null,
-                                        tint = ArvioSkin.colors.focusOutline,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = ind.text,
-                                        style = ArvioSkin.typography.caption.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 12.sp,
-                                            color = Color.White
-                                        )
-                                    )
-                                }
-                            }
-                        }
-
-                        YouTubeStripButton(
-                            label = "YouTube · " + stringResource(R.string.settings),
-                            isFocused = settingsFocused,
-                            onFocusChanged = { settingsFocused = it },
-                            focusRequester = settingsFocusRequester,
-                            onActivate = { focusEmbeddedControls() },
-                            onUp = { focusEmbeddedControls() },
-                            onBack = onClose
-                        )
-                        YouTubeStripButton(
-                            isFocused = isYouTubeFocused,
-                            onFocusChanged = { isYouTubeFocused = it },
-                            focusRequester = youtubeFocusRequester,
-                            onActivate = { openExternalYouTube() },
-                            onUp = { runCatching { playerFocusRequester.requestFocus() } },
-                            onBack = onClose
-                        )
-                    }
-                }
             }
         }
     }

@@ -8,7 +8,7 @@ const code = fs.readFileSync(path.join(__dirname, '../assets/premium-journey.js'
 const id = '38b5a038-5e30-4325-81ad-a2e6d000de18';
 
 function run({ url = 'https://arvio.tv/premium/?lang=es-ES', referrer = '', navigator = {}, fetchFails = false,
-  destinations = ['/premium/?lang=es-ES', 'https://web.arvio.tv/?intent=trial', 'https://ko-fi.com/arvio/tiers', 'https://github.com/ProdigyV21/ARVIO'] } = {}) {
+  destinations = ['/premium/?lang=es-ES', 'https://web.arvio.tv/', 'https://ko-fi.com/arvio/tiers', 'https://github.com/ProdigyV21/ARVIO'] } = {}) {
   const links = destinations.map(destination => {
     const options = typeof destination === 'string' ? { href: destination } : destination;
     const attributes = new Map([['href', options.href]]);
@@ -49,8 +49,8 @@ function run({ url = 'https://arvio.tv/premium/?lang=es-ES', referrer = '', navi
 
 test('content hrefs remain clean before activation, even with an incoming campaign', () => {
   const result = run({ url: `https://arvio.tv/arvio-web/?arvio_journey=${id}&utm_source=reddit&utm_campaign=guides`,
-    destinations: ['/guides/', '/premium/?lang=nl#plans', 'https://web.arvio.tv/?intent=trial'] });
-  assert.deepEqual(result.links.map(link => link.getAttribute('href')), ['/guides/', '/premium/?lang=nl#plans', 'https://web.arvio.tv/?intent=trial']);
+    destinations: ['/guides/', '/premium/?lang=nl#plans', 'https://web.arvio.tv/'] });
+  assert.deepEqual(result.links.map(link => link.getAttribute('href')), ['/guides/', '/premium/?lang=nl#plans', 'https://web.arvio.tv/']);
   assert.deepEqual(result.events.map(event => event.event_name), ['guide_page_view']);
   result.flushTimers();
   assert.equal(result.links[0].getAttribute('href'), '/guides/');
@@ -104,15 +104,15 @@ test('restoration does not overwrite a link changed by another handler', () => {
   assert.equal(result.links[0].getAttribute('href'), '/premium/');
 });
 
-test('web funnel clicks retain intent and placement while external membership URLs remain clean', () => {
+test('web feature-preview clicks retain placement while external membership URLs remain clean', () => {
   const result = run({ url: 'https://arvio.tv/', destinations: [
-    { href: 'https://web.arvio.tv/?intent=trial', placement: 'hero' },
+    { href: 'https://web.arvio.tv/', placement: 'hero' },
     { href: 'https://ko-fi.com/arvio/tiers', region: 'footer' },
     'https://example.org/',
   ] });
   const web = new URL(result.activate(0));
   assert.equal(web.searchParams.get('arvio_journey'), id);
-  assert.equal(web.searchParams.get('intent'), 'trial');
+  assert.equal(web.searchParams.get('intent'), null);
   assert.equal(result.activate(1), 'https://ko-fi.com/arvio/tiers');
   assert.equal(result.activate(2), 'https://example.org/');
   result.activate(0, { type: 'auxclick', button: 1 });
@@ -124,7 +124,7 @@ test('web funnel clicks retain intent and placement while external membership UR
     assert.equal(request.options.keepalive, true);
   }
   result.flushTimers();
-  assert.equal(result.links[0].getAttribute('href'), 'https://web.arvio.tv/?intent=trial');
+  assert.equal(result.links[0].getAttribute('href'), 'https://web.arvio.tv/');
 });
 
 test('same-page anchors, assets, redirects, downloads and unsafe protocols are never decorated', () => {
@@ -151,11 +151,11 @@ test('privacy signals and untrusted page origins disable click attribution and a
 
 test('unavailable analytics does not delay attributed native navigation', async () => {
   for (const fetchFails of [true, 'sync']) {
-    const result = run({ url: 'https://arvio.tv/', fetchFails, destinations: ['https://web.arvio.tv/?intent=trial'] });
+    const result = run({ url: 'https://arvio.tv/', fetchFails, destinations: ['https://web.arvio.tv/'] });
     assert.equal(new URL(result.activate(0)).searchParams.get('arvio_journey'), id);
     await Promise.resolve();
     result.flushTimers();
-    assert.equal(result.links[0].getAttribute('href'), 'https://web.arvio.tv/?intent=trial');
+    assert.equal(result.links[0].getAttribute('href'), 'https://web.arvio.tv/');
   }
 });
 

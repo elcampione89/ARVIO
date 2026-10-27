@@ -115,6 +115,7 @@ class WatchlistScrollDeviceTest {
             compose.activity.settingsDataStore.edit { it[key] = if (poster) "Poster" else "Landscape" }
         }
         every { viewModel.uiState } returns MutableStateFlow(WatchlistUiState(isLoading = false))
+        coEvery { viewModel.loadLibraryPreview(any()) } answers { LibraryPreview(firstArg()) }
         every { viewModel.libraryState } returns state
         every { viewModel.logoUrls } returns MutableStateFlow(emptyMap())
         every { viewModel.selectLibraryProvider(any()) } answers {

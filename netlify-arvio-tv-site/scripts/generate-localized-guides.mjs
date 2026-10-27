@@ -363,7 +363,7 @@ const locales = {
         stepsTitle: "Comece pelo navegador.",
         steps: [
           ["Conecte sua conta", "Entre com a mesma conta ARVIO usada nos dispositivos Android."],
-          ["Inicie o teste", "Use o período de teste disponível para confirmar compatibilidade com seus dispositivos."],
+          ["Assine o Premium", "A hospedagem gerenciada custa US$ 2,99/mês. O acesso é liberado após a confirmação do pagamento no Ko-fi."],
           ["Abra seus serviços", "Navegue pelos perfis, bibliotecas e integrações autorizadas sincronizadas."]
         ],
         faq: [
@@ -373,10 +373,10 @@ const locales = {
         ],
         noteTitle: "Compatibilidade do navegador importa",
         note: "Os navegadores não oferecem os mesmos codecs e controles do player Android. Alguns formatos exigem transcodificação ou abertura em um aplicativo externo compatível.",
-        ctaTitle: "Teste o ARVIO no navegador.",
+        ctaTitle: "Conheça o ARVIO no navegador.",
         ctaCopy: "O premium adiciona acesso por navegador; o app Android continua gratuito.",
-        ctaPrimary: "Iniciar teste gratuito",
-        ctaPrimaryHref: "/go/premium",
+        ctaPrimary: "Conhecer o ARVIO Web",
+        ctaPrimaryHref: "https://web.arvio.tv/",
         related: ["hub", "servers", "tracking"]
       }
     }
@@ -707,7 +707,7 @@ const locales = {
         stepsTitle: "Empieza desde el navegador.",
         steps: [
           ["Conecta tu cuenta", "Inicia sesión con la misma cuenta ARVIO utilizada en tus dispositivos Android."],
-          ["Inicia la prueba", "Utiliza el periodo de prueba disponible para confirmar la compatibilidad de tus dispositivos."],
+          ["Suscríbete a Premium", "El alojamiento gestionado cuesta 2,99 $/mes. El acceso se activa tras confirmar el pago en Ko-fi."],
           ["Abre tus servicios", "Explora perfiles, bibliotecas e integraciones autorizadas sincronizadas."]
         ],
         faq: [
@@ -717,10 +717,10 @@ const locales = {
         ],
         noteTitle: "La compatibilidad del navegador importa",
         note: "Los navegadores no ofrecen los mismos códecs y controles que el reproductor Android. Algunos formatos requieren transcodificación o una aplicación externa compatible.",
-        ctaTitle: "Prueba ARVIO en el navegador.",
+        ctaTitle: "Descubre ARVIO en el navegador.",
         ctaCopy: "Premium añade acceso web; la app Android continúa siendo gratuita.",
-        ctaPrimary: "Iniciar prueba gratuita",
-        ctaPrimaryHref: "/go/premium",
+        ctaPrimary: "Explorar ARVIO Web",
+        ctaPrimaryHref: "https://web.arvio.tv/",
         related: ["hub", "servers", "tracking"]
       }
     }

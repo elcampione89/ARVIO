@@ -119,6 +119,9 @@
     <string name="trailer_delay_desc">שניות לפני שהטריילר מתחיל לנגן</string>
     <string name="trailer_in_cards">טריילרים בכרטיסים</string>
     <string name="trailer_in_cards_desc">טלוויזיה: הצגת קדימונים בכרטיס המוגדל במקום באזור הראשי</string>
+    <string name="netflix_home_style">דף בית בסגנון Netflix</string>
+    <string name="netflix_home_style_desc">טלוויזיה: באנר ענק עם טריילר, הכרטיס הממוקד מתרחב עם תיאור</string>
+    <string name="home_more_info">מידע נוסף</string>
     <string name="frame_rate_desc">כבוי, חלק, או תמיד</string>
     <string name="quality_filters_desc">הוצא רמות איכות במכשיר זה</string>
     <string name="card_layout_desc">כרטיסים לרוחב או לגובה</string>
@@ -129,7 +132,7 @@
     <string name="show_loading_stats_desc">הצג התקדמות רזולוציית הסטרים</string>
     <string name="volume_boost_desc">הגבר מקורות שקטים</string>
     <string name="dns_desc">פנה בקשות API ו-stream</string>
-    <string name="add_catalog_desc">ייבא כתובת URL של Trakt, MDBList או TMDB</string>
+    <string name="add_catalog_desc">ייבא כתובת URL של Trakt, MDBList או TMDB, או הוסף קישור לסרטון YouTube</string>
 
     <!-- Missing translations -->
     <string name="default_subtitle">כתוביות ברירת מחדל</string>
@@ -296,4 +299,41 @@
     <string name="addon_failed_add">הוספת התוסף נכשלה</string>
     <string name="catalog_tmdb_title">קטלוג TMDB</string>
     <string name="catalog_url_tmdb_hint">השתמש בכתובת של דף TMDB מסוג list, collection, company, network, person, keyword או genre</string>
+    <string name="list_add_to">הוסף לרשימה</string>
+    <string name="list_picker_loading">טוען את הרשימות שלך…</string>
+    <string name="list_picker_empty">אין רשימות בשירותים המחוברים</string>
+    <string name="list_added_to">נוסף ל%1$s</string>
+    <string name="list_removed_from">הוסר מ%1$s</string>
+    <string name="list_update_failed">לא ניתן לעדכן את %1$s</string>
+    <string name="profile_kids">פרופיל ילדים</string>
+    <string name="profile_kids_on">מופעל</string>
+    <string name="profile_kids_off">כבוי</string>
+    <string name="profile_kids_badge">ילדים</string>
+    <string name="profile_kids_max_age">גיל מרבי</string>
+    <string name="profile_kids_little">עד 7</string>
+    <string name="profile_kids_older">עד 10</string>
+    <string name="profile_kids_teens">עד 14</string>
+    <string name="profile_kids_hint">רק תכנים שמתאימים לגיל הזה. תכנים ללא סיווג גיל וטלוויזיה בשידור חי מוסתרים.</string>
+    <string name="kids_title_blocked">לא זמין בפרופיל הילדים הזה</string>
+    <string name="kids_row_movies">סרטים לילדים</string>
+    <string name="kids_row_shows">סדרות לילדים</string>
+    <string name="kids_row_animated">סרטי אנימציה אהובים</string>
+    <string name="kids_row_family_shows">סדרות למשפחה</string>
+    <string name="profile_parent_pin_set">הגדר קוד הורים לפרופיל הילדים</string>
+    <string name="profile_parent_pin_enter">קוד הורים</string>
+    <string name="profile_parent_pin_hint">4–5 ספרות. נדרש כדי לשנות או למחוק את פרופיל הילדים, לא כדי לצפות.</string>
+    <!-- YouTube collection -->
+    <string name="youtube_add_link">הוסף קישור YouTube</string>
+    <string name="youtube_link_label">קישור YouTube</string>
+    <string name="youtube_add_link_desc">הדבק קישור לסרטון מ-youtu.be או youtube.com</string>
+    <string name="youtube_video_count">%1$d סרטוני YouTube</string>
+    <string name="youtube_no_videos">עדיין אין סרטונים. הוסף קישור YouTube.</string>
+    <string name="youtube_videos_home_order">%1$d סרטונים • מוצגים בדף הבית בסדר הזה</string>
+    <string name="youtube_videos_home_order_tv">%1$d סרטונים • מוצגים בדף הבית בסדר הזה • ימינה/שמאלה: הזזה או הסרה</string>
+    <string name="youtube_rename_row">שנה שם לשורה</string>
+    <string name="youtube_press_ok_again_remove">לחץ OK שוב כדי להסיר</string>
+    <string name="youtube_ok_move_up">%1$d • OK: הזזה למעלה</string>
+    <string name="youtube_ok_move_down">%1$d • OK: הזזה למטה</string>
+    <string name="youtube_ok_remove">%1$d • OK: הסרה</string>
+    <string name="youtube_video_removed">הוסר: %1$s</string>
 </resources>

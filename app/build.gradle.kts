@@ -17,7 +17,7 @@ plugins {
     id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
     id("io.gitlab.arturbosch.detekt")
     kotlin("plugin.serialization")
-    // Firebase Crashlytics - uncomment after adding google-services.json
+    // VaderTV: no Firebase project (the official app's google-services.json is not for this app id).
     // id("com.google.gms.google-services")
     // id("com.google.firebase.crashlytics")
 }
@@ -93,8 +93,8 @@ android {
         // Fire TV devices can be as low as Android 7.1 (API 25) or lower depending on model/OS.
         minSdk = 23
         targetSdk = 36
-        versionCode = 329
-        versionName = "2.2.0"
+        versionCode = 330
+        versionName = "2.3.0"
         buildConfigField("String", "GITHUB_OWNER", "\"ProdigyV21\"")
         buildConfigField("String", "GITHUB_REPO", "\"ARVIO\"")
         buildConfigField("Boolean", "FEATURE_PLUGINS_ENABLED", "false")
@@ -214,7 +214,7 @@ android {
             renderscriptOptimLevel = 3
 
             // Build config fields for release
-            buildConfigField("Boolean", "ENABLE_CRASH_REPORTING", "true")
+            buildConfigField("Boolean", "ENABLE_CRASH_REPORTING", "false")
         }
 
         debug {
@@ -238,7 +238,7 @@ android {
             isDebuggable = false
             isJniDebuggable = false
 
-            buildConfigField("Boolean", "ENABLE_CRASH_REPORTING", "true")
+            buildConfigField("Boolean", "ENABLE_CRASH_REPORTING", "false")
         }
     }
 
@@ -252,6 +252,9 @@ android {
         getByName("main") {
             java.srcDir("src/main/tdlib-java")
             java.srcDir("src/main/dvmkv-java")
+            // Vendored media3 1.9.0 TS extractor that keeps every DVB subtitle stream in HLS
+            // (see iptvts/package-info.java for the re-vendoring procedure on media3 bumps).
+            java.srcDir("src/main/iptvts-java")
             res.srcDir("src/main/res-player")
         }
     }
@@ -323,8 +326,9 @@ ksp {
     configurations.all {
         resolutionStrategy {
             force("org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.0")
-            force("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-            force("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+            force("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+            force("org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2")
+            force("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
         }
     }
 
@@ -431,7 +435,7 @@ ksp {
     implementation("org.jsoup:jsoup:1.17.2")
 
     // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     // Image loading - Coil
     implementation("io.coil-kt:coil-compose:2.5.0")
@@ -442,12 +446,15 @@ ksp {
     // Supabase (optional - for cloud sync)
     implementation("io.github.jan-tennert.supabase:postgrest-kt:2.0.4")
     implementation("io.github.jan-tennert.supabase:gotrue-kt:2.0.4")
-    implementation("io.ktor:ktor-client-android:2.3.7")
+    // Ktor 2.3.12+ removes an internal-coroutines ABI dependency that crashes
+    // the Telegram proxy with the coroutines version required by Firebase Sessions.
+    implementation(platform("io.ktor:ktor-bom:2.3.13"))
+    implementation("io.ktor:ktor-client-android:2.3.13")
     // Ktor server modules used by Telegram streaming proxy
-    implementation("io.ktor:ktor-server-core:2.3.7")
-    implementation("io.ktor:ktor-server-cio:2.3.7")
-    implementation("io.ktor:ktor-server-call-logging:2.3.7")
-    implementation("io.ktor:ktor-server-host-common:2.3.7")
+    implementation("io.ktor:ktor-server-core:2.3.13")
+    implementation("io.ktor:ktor-server-cio:2.3.13")
+    implementation("io.ktor:ktor-server-call-logging:2.3.13")
+    implementation("io.ktor:ktor-server-host-common:2.3.13")
 
     // DataStore for preferences
     implementation("androidx.datastore:datastore-preferences:1.0.0")
@@ -476,16 +483,15 @@ ksp {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     // Firebase Crashlytics - optional, works when google-services.json is present
-    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
-    implementation("com.google.firebase:firebase-crashlytics-ktx")
-
-    // Sentry crash reporting. Runtime initialization is gated by BuildConfig.ENABLE_CRASH_REPORTING
-    // and SENTRY_DSN from secrets.properties/secrets.defaults.properties.
-    implementation("io.sentry:sentry-android:8.40.0")
+    // BoM 35 raises minSdk to 24; retain support for existing API 23 sideload devices.
+    implementation(platform("com.google.firebase:firebase-bom:34.14.1"))
+    implementation("com.google.firebase:firebase-crashlytics")
+    implementation("com.google.firebase:firebase-crashlytics-ndk")
+    implementation("com.google.firebase:firebase-analytics")
 
     baselineProfile(project(":benchmark"))
 
-    // YouTube player for trailers (official IFrame API wrapper)
+    // YouTube player for the Home billboard trailer (official IFrame API wrapper)
     implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:13.0.0") {
         exclude(group = "androidx.lifecycle")
     }
@@ -510,7 +516,7 @@ ksp {
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     add("testSideloadImplementation", "com.squareup.okhttp3:mockwebserver:5.3.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("io.mockk:mockk:1.13.8")
     testImplementation("app.cash.turbine:turbine:1.0.0")  // Flow testing
     testImplementation("com.google.truth:truth:1.1.5")    // Better assertions
@@ -525,7 +531,7 @@ ksp {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.2.0")
     androidTestImplementation("io.mockk:mockk-android:1.13.8")
-    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 }
 
 secrets {
@@ -539,6 +545,7 @@ secrets {
     ignoreList.add("sdk.*")
     ignoreList.add("APP_ANON_KEY")
     ignoreList.add("SIMKL_CLIENT_SECRET")
+    ignoreList.add("SENTRY_DSN")
     ignoreList.add("TELEGRAM_API_ID")
     ignoreList.add("TELEGRAM_API_HASH")
 }

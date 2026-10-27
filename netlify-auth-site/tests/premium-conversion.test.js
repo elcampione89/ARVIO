@@ -42,10 +42,11 @@ test("different billing emails join only with verified, unambiguous ownership", 
   assert.equal(report([{ billingKey: 'billing', accountKey: 'cloud' }, { billingKey: 'billing', accountKey: 'other' }]).trialCohort.paidByReportEnd, 0);
 });
 
-test("new trials last three days while existing records retain their own expiry", () => {
-  assert.equal(entitlements.TRIAL_DAYS, 3);
-  assert.equal(entitlements.TRIAL_MS, 3 * 24 * 60 * 60 * 1000);
-  assert.equal(entitlements.evaluateEntitlement(null).trialDurationDays, 3);
+test("hosted Web is paid-only while historical trial deadlines are retained", () => {
+  assert.equal(entitlements.TRIAL_DAYS, 0);
+  assert.equal(entitlements.TRIAL_MS, 0);
+  assert.equal(entitlements.evaluateEntitlement(null).trialDurationDays, 0);
+  assert.equal(entitlements.evaluateEntitlement(null).trialAvailable, false);
 
   const expiresAt = new Date(Date.now() + 30_000).toISOString();
   const state = entitlements.evaluateEntitlement({
@@ -54,7 +55,9 @@ test("new trials last three days while existing records retain their own expiry"
     expiresAt,
     trialUsed: true
   });
-  assert.equal(state.entitled, true);
+  assert.equal(state.entitled, false);
+  assert.equal(state.reason, "none");
+  assert.equal(state.trialAvailable, false);
   assert.equal(state.expiresAt, expiresAt);
 });
 
@@ -112,11 +115,11 @@ test("public Premium links preserve membership and free self-hosting destination
   const { premiumDestination } = require('../../netlify-arvio-tv-site/premium-redirect');
   assert.match(redirects, /to = "\/premium-redirect.html"\s+status = 200/);
   assert.match(premiumDestination('/go/membership/spotlight'), /ko-fi\.com\/arvio\/tiers.*utm_content=spotlight/);
-  assert.match(premiumDestination('/go/premium/hero'), /intent=trial/);
+  assert.equal(new URL(premiumDestination('/go/premium/hero')).searchParams.has('intent'), false);
 
   const login = fs.readFileSync(path.join(root, "web", "components", "login", "LoginScreen.tsx"), "utf8");
-  assert.match(login, /TRIAL_INTENT_KEY/);
-  assert.match(login, /get\("intent"\) === "trial"/);
+  assert.doesNotMatch(login, /TRIAL_INTENT_KEY/);
+  assert.doesNotMatch(login, /get\("intent"\) === "trial"/);
 });
 
 test("website handoff measurement preserves every CTA and cannot redirect off the allowlist", () => {
@@ -124,7 +127,7 @@ test("website handoff measurement preserves every CTA and cannot redirect off th
   for (const placement of ['', '/nav', '/hero', '/spotlight', '/preview', '/details', '/faq', '/footer']) {
     const target = new URL(premiumDestination('/go/premium' + placement));
     assert.equal(target.origin, 'https://web.arvio.tv');
-    assert.equal(target.searchParams.get('intent'), 'trial');
+    assert.equal(target.searchParams.has('intent'), false);
   }
   for (const placement of ['nav', 'spotlight', 'details', 'footer']) {
     assert.equal(new URL(premiumDestination('/go/membership/' + placement)).origin, 'https://ko-fi.com');
@@ -162,16 +165,16 @@ test("trial activation includes usage after trial even with an earlier usage eve
   assert.equal(result.trialActivation.externalPlayerRequested, 1);
 });
 
-test("trial emails suppress paid accounts and stale welcomes, not genuine expiry notices", () => {
+test("all legacy trial messages are suppressed after hosted Web becomes paid-only", () => {
   const suppress = trialEmails._test.trialEmailSuppression;
   const paid = { status: 'active', source: 'kofi', expiresAt: '2099-01-01' };
   const trial = { status: 'active', source: 'trial', expiresAt: '2099-01-01' };
   const job = { type: 'reminder', expiresAt: '2099-01-01' };
-  assert.equal(suppress(job, paid), 'already_paid');
-  assert.equal(suppress(job, trial, paid), 'already_paid');
-  assert.equal(suppress(job, null), 'no_entitlement');
-  assert.equal(suppress(job, trial), null);
-  assert.equal(suppress({ ...job, type: 'welcome', expiresAt: '2000-01-01' }, trial), 'stale_trial_message');
-  assert.equal(suppress({ ...job, type: 'expired', expiresAt: '2000-01-01' }, trial), 'trial_still_active');
-  assert.equal(suppress({ ...job, type: 'expired', expiresAt: '2000-01-01' }, { ...trial, expiresAt: '2000-01-01' }), null);
+  for (const type of trialEmails.JOB_TYPES) {
+    assert.equal(suppress({ ...job, type }, paid), 'trials_disabled');
+    assert.equal(suppress({ ...job, type }, trial, paid), 'trials_disabled');
+    assert.equal(suppress({ ...job, type }, null), 'trials_disabled');
+    assert.equal(suppress({ ...job, type }, trial), 'trials_disabled');
+    assert.equal(suppress({ ...job, type, expiresAt: '2000-01-01' }, { ...trial, expiresAt: '2000-01-01' }), 'trials_disabled');
+  }
 });

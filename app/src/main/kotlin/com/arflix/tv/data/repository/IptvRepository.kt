@@ -182,6 +182,20 @@ internal fun normalizeIptvSortOrder(value: String?): String = when (value?.trim(
 }
 
 /**
+ * Removes characters a pasted address can carry that `trim()` keeps: control characters such as a
+ * trailing NUL (an emulator/clipboard paste produced `playlist.m3u\u0000`, which the server
+ * answered with HTTP 400) and invisible format characters (zero-width spaces, BOM, direction marks).
+ * [keepSeparators] keeps line breaks and tabs, which separate several guide addresses (or an
+ * Xtream "host user pass" triplet) in one field.
+ */
+internal fun stripInvisibleInputChars(value: String, keepSeparators: Boolean = false): String =
+    value.filterNot { ch ->
+        val separator = ch == '\n' || ch == '\r' || ch == '\t'
+        (Character.isISOControl(ch) && !(keepSeparators && separator)) ||
+            Character.getType(ch) == Character.FORMAT.toInt()
+    }
+
+/**
  * Title normalization for Xtream VOD/series lookups.
  *
  * Lives at top level so it can be unit-tested without an Android `Context`,
@@ -706,6 +720,10 @@ class IptvRepository @Inject constructor(
     private var cachedEpgAt: Long = 0L
 
     private val discoveredM3uEpgUrls = java.util.concurrent.CopyOnWriteArraySet<String>()
+    // Playlists whose #EXTM3U header was already read for a guide address this session.
+    private val embeddedEpgHeadersRead = java.util.concurrent.CopyOnWriteArraySet<String>()
+    // The playlist source the saved guide addresses were last restored for.
+    @Volatile private var discoveredEpgUrlsRestoredFor: String? = null
     @Volatile
     private var cacheOwnerProfileId: String? = null
     @Volatile
@@ -1397,8 +1415,8 @@ class IptvRepository @Inject constructor(
     suspend fun saveStalkerConfig(portalUrl: String, macAddress: String) {
         val profileId = profileManager.getProfileIdSync()
         val previousConfig = observeConfig().first()
-        val normalizedUrl = portalUrl.trim().trimEnd('/')
-        val normalizedMac = macAddress.trim().uppercase().let { mac ->
+        val normalizedUrl = stripInvisibleInputChars(portalUrl).trim().trimEnd('/')
+        val normalizedMac = stripInvisibleInputChars(macAddress).trim().uppercase().let { mac ->
             if (mac.isNotEmpty() && !mac.startsWith("00:1A:79:")) mac else mac
         }
         // Legacy single-portal save: writes/updates the first portal entry.
@@ -1586,7 +1604,7 @@ class IptvRepository @Inject constructor(
     }
 
     private fun normalizeStoredIptvUrl(raw: String): String {
-        val trimmed = raw.trim()
+        val trimmed = stripInvisibleInputChars(raw).trim()
         if (trimmed.isBlank()) return ""
         val decoded = decodeLegacyBase64Url(trimmed)
         return normalizeIptvInput(decoded ?: trimmed)
@@ -1653,7 +1671,7 @@ class IptvRepository @Inject constructor(
     }
 
     private fun normalizeStoredEpgInputs(raw: String): List<String> {
-        val trimmed = raw.trim()
+        val trimmed = stripInvisibleInputChars(raw, keepSeparators = true).trim()
         if (trimmed.isBlank()) return emptyList()
         val decoded = decodeLegacyBase64Url(trimmed)
         return normalizeEpgInputs(decoded ?: trimmed)
@@ -3518,6 +3536,8 @@ class IptvRepository @Inject constructor(
         if (key != currentEpgIndexKey) return@withContext null
         val channels = channelStore.loadStartupChannels(key, LargeIptvListChannelCount, LargeListMemoryChannelLimit)
         if (channels.isEmpty()) return@withContext null
+        // This path skips the playlist parse, so bring back the guide address it declared.
+        restoreDiscoveredEpgUrlsFromCache(config)
         IptvSnapshot(
             channels = channels, grouped = buildGroupedChannels(channels),
             favoriteChannels = observeFavoriteChannels().first(),
@@ -4070,7 +4090,13 @@ class IptvRepository @Inject constructor(
         channels: List<IptvChannel>
     ): Pair<Map<String, IptvNowNext>, Boolean> {
         if (channels.isEmpty()) return Pair(emptyMap(), false)
-        val candidates = resolveScopedEpgCandidates(config)
+        var candidates = resolveScopedEpgCandidates(config)
+        if (candidates.isEmpty()) {
+            // No guide known yet: the playlist may name one in its #EXTM3U line, which is
+            // never read when the channels come from the store instead of a playlist parse.
+            discoverEmbeddedEpgSourcesIfNeeded(activePlaylists(config))
+            candidates = resolveScopedEpgCandidates(config)
+        }
         if (candidates.isEmpty()) return Pair(emptyMap(), false)
 
         val playlistKey = channels
@@ -4098,9 +4124,15 @@ class IptvRepository @Inject constructor(
         }
         visibleXmlEpgCooldownUntil[cooldownKey] = nowMs + 90_000L
 
+        // The guide file is downloaded and read in full either way, and the same file may not be
+        // fetched again for two minutes, so for a list small enough to hold keep every channel's
+        // programmes: one download then fills the whole guide instead of only the visible rows.
+        val guideChannels = smallListChannelsForGuide()
+            ?.let { all -> (channels + all).distinctBy { it.id } }
+            ?: channels
         val visibleCandidates = candidates.take(2)
         for ((index, candidate) in visibleCandidates.withIndex()) {
-            val candidateChannels = channelsForScopedEpgCandidate(candidate, channels)
+            val candidateChannels = channelsForScopedEpgCandidate(candidate, guideChannels)
             if (candidateChannels.isEmpty()) continue
             System.err.println(
                 "[EPG-Refresh] XMLTV visible fallback ${index + 1}/${visibleCandidates.size} " +
@@ -4112,7 +4144,11 @@ class IptvRepository @Inject constructor(
                     withTimeoutOrNull(12_000L) {
                         val jobContext = currentCoroutineContext()
                         runInterruptible(Dispatchers.IO) {
-                            fetchAndParseEpg(candidate.url, candidateChannels) { jobContext.ensureActive() }
+                            fetchAndParseEpg(
+                                candidate.url,
+                                candidateChannels,
+                                notModifiedCheckChannels = channelsForScopedEpgCandidate(candidate, channels),
+                            ) { jobContext.ensureActive() }
                         }
                     }
                 } ?: emptyMap()
@@ -4142,6 +4178,15 @@ class IptvRepository @Inject constructor(
 
         visibleXmlEpgCooldownUntil[cooldownKey] = System.currentTimeMillis() + 5 * 60_000L
         return Pair(emptyMap(), false)
+    }
+
+    /** Every channel of the active list when it is at most [LargeIptvListChannelCount], else null. */
+    private fun smallListChannelsForGuide(): List<IptvChannel>? {
+        val key = currentEpgIndexKey
+        if (key.isBlank()) return null
+        val count = pagedChannelStoreCount()
+        if (count <= 0 || count > LargeIptvListChannelCount) return null
+        return runCatching { channelStore.loadAll(key) }.getOrNull()?.takeIf { it.isNotEmpty() }
     }
 
     private fun persistCurrentCacheSnapshot(config: IptvConfig, loadedAtMs: Long = System.currentTimeMillis()) {
@@ -4330,6 +4375,8 @@ class IptvRepository @Inject constructor(
         // a portal that did gets caught by the fingerprint check on read.
         stalkerCategoryStore = null
         discoveredM3uEpgUrls.clear()
+        embeddedEpgHeadersRead.clear()
+        discoveredEpgUrlsRestoredFor = null
         xtreamVodCacheKey = null
         xtreamVodLoadedAtMs = 0L
         xtreamSeriesLoadedAtMs = 0L
@@ -8408,6 +8455,7 @@ class IptvRepository @Inject constructor(
     }
 
     private fun resolveScopedEpgCandidates(config: IptvConfig): List<ScopedEpgCandidate> {
+        restoreDiscoveredEpgUrlsFromCache(config)
         val allLists = activePlaylists(config)
         return buildList {
             allLists.forEach { list ->
@@ -8471,7 +8519,8 @@ class IptvRepository @Inject constructor(
         val candidates = playlists.filter { playlist ->
             playlist.m3uUrl.isNotBlank() &&
                 playlist.allEpgUrls().isEmpty() &&
-                resolveXtreamCredentials(playlist) == null
+                resolveXtreamCredentials(playlist) == null &&
+                playlist.m3uUrl !in embeddedEpgHeadersRead
         }
         if (candidates.isEmpty()) return
 
@@ -8479,6 +8528,10 @@ class IptvRepository @Inject constructor(
             candidates.map { playlist ->
                 async(Dispatchers.IO) {
                     discoverM3uHeaderEpgUrls(playlist.m3uUrl)
+                        // A header that was read (with or without a guide) is not read again
+                        // this session; a failed request is retried on the next guide request.
+                        ?.also { embeddedEpgHeadersRead.add(playlist.m3uUrl) }
+                        .orEmpty()
                 }
             }.awaitAll()
         }
@@ -8488,14 +8541,15 @@ class IptvRepository @Inject constructor(
             .forEach { discoveredM3uEpgUrls.add(it) }
     }
 
-    private fun discoverM3uHeaderEpgUrls(m3uUrl: String): List<String> {
+    /** The guide addresses named in a playlist's `#EXTM3U` line, or null when it could not be read. */
+    private fun discoverM3uHeaderEpgUrls(m3uUrl: String): List<String>? {
         return runCatching {
             val request = Request.Builder()
                 .url(validatedIptvHttpUrl(m3uUrl, "IPTV playlist URL"))
                 .build()
             iptvCatalogHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@use emptyList()
-                val body = response.body ?: return@use emptyList()
+                if (!response.isSuccessful) return@use null
+                val body = response.body ?: return@use null
                 BufferedReader(InputStreamReader(body.byteStream(), StandardCharsets.UTF_8), 32 * 1024).use { reader ->
                     repeat(32) {
                         val line = reader.readLine() ?: return@use emptyList()
@@ -8510,8 +8564,49 @@ class IptvRepository @Inject constructor(
                     emptyList()
                 }
             }
-        }.getOrDefault(emptyList())
+        }.getOrNull()
     }
+
+    /**
+     * Brings back the guide addresses a playlist declared in its header, saved with the guide
+     * cache. Startup paths that read channels from the SQLite store never parse the playlist,
+     * so without this the address stayed unknown and the guide never loaded. Runs once per
+     * playlist source; the file is streamed so a large stored guide is skipped, not parsed.
+     */
+    internal fun restoreDiscoveredEpgUrlsFromCache(config: IptvConfig) {
+        if (discoveredM3uEpgUrls.isNotEmpty()) return
+        val sourceKey = buildSourceSignature(config)
+        if (discoveredEpgUrlsRestoredFor == sourceKey) return
+        discoveredEpgUrlsRestoredFor = sourceKey
+        runCatching {
+            val file = cacheFile()
+            if (!file.exists() || file.length() > MAX_IPTV_CACHE_BYTES * 2) return
+            var urls: List<String> = emptyList()
+            var configSignature = ""
+            var sourceSignature = ""
+            cacheJsonReader(file).use { reader ->
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    when (reader.nextName()) {
+                        "configSignature" -> configSignature = reader.nextString().orEmpty()
+                        "sourceSignature" -> sourceSignature = reader.nextString().orEmpty()
+                        "discoveredEpgUrls" -> {
+                            val type = TypeToken.getParameterized(List::class.java, String::class.java).type
+                            urls = gson.fromJson<List<String>>(reader, type).orEmpty()
+                        }
+                        else -> reader.skipValue()
+                    }
+                }
+                reader.endObject()
+            }
+            if (isValidCacheSignature(config, configSignature, sourceSignature)) {
+                rememberDiscoveredEpgUrls(urls)
+            }
+        }
+    }
+
+    /** Guide addresses the active playlists declared themselves (`url-tvg`), not entered in settings. */
+    fun playlistDeclaredEpgUrls(): List<String> = discoveredM3uEpgUrls.toList()
 
     private suspend fun fetchXtreamLiveChannels(
         creds: XtreamCredentials,
@@ -8705,11 +8800,13 @@ class IptvRepository @Inject constructor(
     private fun fetchAndParseEpg(
         url: String,
         channels: List<IptvChannel>,
+        // The channels the caller actually needs; a wider [channels] set is parsed as a bonus.
+        notModifiedCheckChannels: List<IptvChannel> = channels,
         checkActive: () -> Unit = {},
     ): Map<String, IptvNowNext> {
         checkActive()
         // A 304 is only useful when this exact request can be served from cache.
-        val hasDbEntries = channels.all { hasProgramData(cachedNowNext[it.id]) }
+        val hasDbEntries = notModifiedCheckChannels.all { hasProgramData(cachedNowNext[it.id]) }
 
         fun epgRequest(targetUrl: String, userAgent: String, forceFull: Boolean = false): Request {
             val builder = Request.Builder()
@@ -11711,10 +11808,12 @@ class IptvRepository @Inject constructor(
             if (text.isBlank()) return null
             val payload = gson.fromJson(text, IptvCachePayload::class.java) ?: return null
             if (!isValidCacheSignature(config, payload.configSignature, payload.sourceSignature)) return null
+            // The playlist's own guide address must come back even when no guide has been
+            // stored yet: without it the guide never loads, so nowNext would stay empty forever.
+            rememberDiscoveredEpgUrls(payload.discoveredEpgUrls.orEmpty())
             // Channels now come from the SQLite store, so the guide cache is channel-less;
             // it's only useful for its nowNext slice.
             if (payload.channels.isEmpty() && payload.nowNext.isEmpty()) return null
-            rememberDiscoveredEpgUrls(payload.discoveredEpgUrls.orEmpty())
             payload
         }.getOrNull()
     }

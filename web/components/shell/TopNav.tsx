@@ -4,13 +4,12 @@ import { useTranslation } from "@/lib/i18n";
 
 import { BadgeCheck, Bookmark, Home, Search, Settings, Tv } from "lucide-react";
 import { useEffect, useState } from "react";
-import { authClient, useApp } from "@/lib/store";
+import { useApp } from "@/lib/store";
 import { ProfileAvatarVisual } from "@/components/profile/ProfileAvatar";
 import type { NavSection } from "@/lib/types";
-import { kofiSubscribeUrl } from "@/lib/entitlement";
 import { useEntitlement } from "@/lib/entitlementContext";
 import { trialRemainingLabel } from "@/lib/entitlementPolicy";
-import { trackPremiumEvent } from "@/lib/premiumAnalytics";
+import { MembershipCheckout } from "./MembershipCheckout";
 
 const nav = [
   { id: "home", label: "Home", icon: Home },
@@ -27,7 +26,7 @@ export function TopNav() {
   const [now, setNow] = useState(Date.now);
   const trialLabel = trialRemainingLabel(entitlement, now);
   const trialActive = trialLabel !== null;
-  const trialTitle = trialActive ? `${trialLabel}. Keep Premium after ${new Date(entitlement!.expiresAt!).toLocaleString()}` : "Keep Premium";
+  const trialTitle = trialActive ? `${trialLabel}. ${translateUi("Keep Premium - $2.99/month")}` : translateUi("Keep Premium - $2.99/month");
 
   useEffect(() => {
     setNow(Date.now());
@@ -75,17 +74,14 @@ export function TopNav() {
         </nav>
         <div className="top-right">
           {trialActive && (
-            <a
+            <MembershipCheckout
               className="trial-membership-link"
-              href={kofiSubscribeUrl()}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={translateUi(trialTitle)}
-              onClick={() => { void trackPremiumEvent(authClient, "checkout_opened", { source: "trial_nav" }); }}
+              entry="trial_nav"
+              title={trialTitle}
             >
               <BadgeCheck size={18} />
-              <span>{translateUi(trialLabel)}</span>
-            </a>
+              <span>{translateUi("Keep Premium")}</span>
+            </MembershipCheckout>
           )}
           <button
             type="button"
@@ -109,17 +105,14 @@ export function TopNav() {
         </div>
         <div className="mobile-header-actions">
           {trialActive && (
-            <a
+            <MembershipCheckout
               className="mobile-premium-link"
-              href={kofiSubscribeUrl()}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={translateUi(trialTitle)}
-              title={translateUi(trialTitle)}
-              onClick={() => { void trackPremiumEvent(authClient, "checkout_opened", { source: "trial_mobile_nav" }); }}
+              iconOnly
+              entry="trial_mobile_nav"
+              title={trialTitle}
             >
               <BadgeCheck size={20} />
-            </a>
+            </MembershipCheckout>
           )}
           <button
             type="button"

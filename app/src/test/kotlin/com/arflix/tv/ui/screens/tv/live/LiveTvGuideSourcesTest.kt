@@ -131,6 +131,19 @@ class LiveTvGuideSourcesTest {
     }
 
     @Test
+    fun aGuideNamedInThePlaylistHeaderCountsAsXmltv() {
+        // `#EXTM3U url-tvg="..."` with nothing entered in settings.
+        val config = IptvConfig(playlists = listOf(playlist()))
+        val declared = listOf("https://example.test/epg.xml.gz")
+
+        assertThat(LiveTvGuideSources.hasXmltvSource(config, declared)).isTrue()
+        assertThat(LiveTvGuideSources.hasXmltvSource(config, listOf(" "))).isFalse()
+        assertThat(
+            LiveTvGuideSources.allowsFullGuideBackfill(config, channelCount = 84_704, playlistDeclaredGuides = declared)
+        ).isTrue()
+    }
+
+    @Test
     fun theLargeListThresholdIsInclusiveOfSmallerLists() {
         val config = IptvConfig(m3uUrl = "https://example.test/playlist.m3u8")
         val justUnder = LiveTvGuideSources.LARGE_LIST_CHANNEL_COUNT - 1

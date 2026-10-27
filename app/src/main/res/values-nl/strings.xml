@@ -63,4 +63,6 @@
     <string name="add_later">Voeg films en series toe om later te kijken</string>
     <string name="sources_available">bronnen beschikbaar</string>
     <string name="ends_at">Eindigt om</string>
+    <string name="watchlist_on_home">Watchlist op startscherm</string>
+    <string name="watchlist_on_home_desc">Toon je watchlist onder Verder kijken.</string>
 </resources>

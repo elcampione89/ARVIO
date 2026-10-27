@@ -174,12 +174,12 @@ export class TraktClient {
         if (rows.length < 100 || !fresh.length) return all;
       }
     };
-    const [all, hidden, resetHidden] = await Promise.all([
+    const [all, hidden, dropped] = await Promise.all([
       readShows("/sync/watched/shows"),
       readShows("/users/hidden/progress_watched?type=show"),
-      readShows("/users/hidden/progress_watched_reset?type=show")
+      readShows("/users/hidden/dropped?type=show")
     ]);
-    const excluded = new Set([...hidden, ...resetHidden].map(row => row.show!.ids!.trakt!));
+    const excluded = new Set([...hidden, ...dropped].map(row => row.show!.ids!.trakt!));
     return all.filter(row => !excluded.has(row.show!.ids!.trakt!)).map(row => ({ ...row, type: "show" }));
   }
 
@@ -269,19 +269,25 @@ export class TraktClient {
   }
 
   // Shows the user hid from their Trakt progress ("dropped"), across BOTH
-  // hidden sections Trakt keeps: progress_watched and progress_watched_reset.
+  // current hidden sections: progress_watched and dropped. Reset progress is
+  // rewatch history, not a hidden section; the old endpoint returns 404.
   // Trakt itself omits these from Up Next, so Continue Watching must too —
   // otherwise a dropped show reappears here forever. Returns trakt show ids.
   async hiddenProgressShowIds(): Promise<Set<number>> {
     const token = await this.refreshIfNeeded();
     if (!token) return new Set();
-    const sections = ["progress_watched", "progress_watched_reset"];
+    const sections = ["progress_watched", "dropped"];
     const ids = new Set<number>();
-    const pages = await Promise.all(sections.map((section) =>
-      this.trakt<unknown[]>(`/users/hidden/${section}?type=show&limit=100`, {
-        headers: { "x-user-token": token.access_token }
-      }).catch(() => [] as unknown[])
-    ));
+    const pages = await Promise.all(sections.map(async (section) => {
+      const rows: unknown[] = [];
+      for (let page = 1; ; page += 1) {
+        const batch = await this.trakt<unknown[]>(`/users/hidden/${section}?type=show&limit=100&page=${page}`, {
+          headers: { "x-user-token": token.access_token }
+        });
+        rows.push(...batch);
+        if (batch.length < 100) return rows;
+      }
+    }));
     pages.flat().forEach((raw) => {
       const traktId = (raw as { show?: { ids?: { trakt?: number } } }).show?.ids?.trakt;
       if (typeof traktId === "number") ids.add(traktId);

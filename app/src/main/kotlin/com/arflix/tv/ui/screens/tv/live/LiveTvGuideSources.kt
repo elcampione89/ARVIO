@@ -20,11 +20,13 @@ object LiveTvGuideSources {
     const val LARGE_LIST_CHANNEL_COUNT: Int = 3_000
 
     /**
-     * Explicit guides and standard Xtream logins both provide an XMLTV endpoint.
+     * Explicit guides and standard Xtream logins both provide an XMLTV endpoint, and so does
+     * a playlist that names its own guide in its `#EXTM3U` line ([playlistDeclaredGuides]).
      * Large-list backfill uses this single feed, not a per-channel API sweep.
      */
-    fun hasXmltvSource(config: IptvConfig): Boolean {
+    fun hasXmltvSource(config: IptvConfig, playlistDeclaredGuides: Collection<String> = emptyList()): Boolean {
         if (config.epgUrl.isNotBlank()) return true
+        if (playlistDeclaredGuides.any { it.isNotBlank() }) return true
         if (config.playlists.isEmpty() && hasXtreamLogin(config.m3uUrl)) return true
         return config.playlists.any { playlist ->
             playlist.enabled &&
@@ -48,8 +50,12 @@ object LiveTvGuideSources {
      * guide at all, no matter how long it was left running. XMLTV is bounded,
      * so it is allowed through.
      */
-    fun allowsFullGuideBackfill(config: IptvConfig, channelCount: Int): Boolean {
+    fun allowsFullGuideBackfill(
+        config: IptvConfig,
+        channelCount: Int,
+        playlistDeclaredGuides: Collection<String> = emptyList(),
+    ): Boolean {
         if (channelCount < LARGE_LIST_CHANNEL_COUNT) return true
-        return hasXmltvSource(config)
+        return hasXmltvSource(config, playlistDeclaredGuides)
     }
 }

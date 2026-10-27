@@ -62,7 +62,7 @@ class CrashReportActivity : ComponentActivity() {
 
         val prefs = getSharedPreferences("arvio_crash_store", Context.MODE_PRIVATE)
         val crashId = intent.getStringExtra(EXTRA_CRASH_ID) ?: prefs.getString("last_crash_id", "N/A") ?: "N/A"
-        // The reported message stays in English so the crash report sent to Discord/Sentry
+        // The reported message stays in English so the crash report sent to Discord
         // remains stable and searchable; only the on-screen fallback is localized.
         val reportedCrashMsg = intent.getStringExtra(EXTRA_CRASH_MSG) ?: prefs.getString("last_crash_msg", null)
         val crashMsg = reportedCrashMsg ?: "Unexpected error"
@@ -77,6 +77,7 @@ class CrashReportActivity : ComponentActivity() {
                     hasReportedCrashMsg = reportedCrashMsg != null,
                     crashTime = crashTime,
                     crashVersion = crashVersion,
+                    crashProvider = prefs.getString("last_crash_provider", "sentry") ?: "sentry",
                     onRestartApp = {
                         val restartIntent = Intent(this@CrashReportActivity, MainActivity::class.java).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
@@ -106,7 +107,8 @@ fun CrashReportScreen(
     crashTime: Long,
     crashVersion: String,
     onRestartApp: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    crashProvider: String = "firebase"
 ) {
     val context = LocalContext.current
     val deviceType = detectDeviceType(context)
@@ -129,25 +131,26 @@ fun CrashReportScreen(
         sdf.format(Date(crashTime))
     }
 
-    val sentryLink = remember(crashId) {
-        if (crashId != "N/A") "https://sentry.io/issues/?query=id%3A$crashId" else "N/A"
-    }
+    val firebase = crashProvider == "firebase"
+    val dashboardLink = if (firebase) "https://console.firebase.google.com/project/arvio-15c5a/crashlytics"
+        else "https://sentry.io/issues/?query=id%3A${Uri.encode(crashId)}"
 
-    val formattedReport = remember(crashId, sentryLink, crashMsg, crashVersion, timeString) {
+    val formattedReport = remember(crashId, crashMsg, crashVersion, timeString, firebase) {
         """
         **🚨 ARVIO Crash Report**
         **Crash ID:** `$crashId`
-        **Sentry Link:** $sentryLink
+        **${if (firebase) "Crashlytics" else "Sentry Link"}:** $dashboardLink
+        ${if (firebase) "**Report reference:** `arvio_report_id=$crashId`" else ""}
         **Version:** $crashVersion
         **Time:** $timeString
         **Error:** $crashMsg
         """.trimIndent()
     }
 
-    val webBridgeUrl = remember(crashId, crashVersion, crashMsg, crashTime) {
+    val webBridgeUrl = remember(crashId, crashVersion, crashMsg, crashTime, firebase) {
         val encodedErr = Uri.encode(crashMsg.take(300))
         val encodedV = Uri.encode(crashVersion)
-        "https://arvio.tv/report?id=$crashId&v=$encodedV&err=$encodedErr&t=$crashTime"
+        "https://arvio.tv/report?provider=${if (firebase) "firebase" else "sentry"}&id=${Uri.encode(crashId)}&v=$encodedV&err=$encodedErr&t=$crashTime"
     }
 
     Box(

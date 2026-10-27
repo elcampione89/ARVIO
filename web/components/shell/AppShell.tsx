@@ -17,7 +17,7 @@ import { BackHandler } from "./BackHandler";
 import { ExternalPlaybackPrompt } from "./ExternalPlaybackPrompt";
 import { MediaContextMenu } from "./MediaContextMenu";
 import { NoAddonsPrompt } from "./NoAddonsPrompt";
-import { EntitlementGate } from "./Paywall";
+import { EntitlementGate, PaywallScreen } from "./Paywall";
 import { Toast } from "./Toast";
 import { TopNav } from "./TopNav";
 import { PremiumUsage } from "./PremiumUsage";
@@ -31,8 +31,24 @@ const ACCENTS: Record<string, string> = {
   purple: "#8b5cf6"
 };
 
+function PaidPlayerWarmup() {
+  useEffect(() => {
+    const warm = () => {
+      void import("hls.js").catch(() => undefined);
+      void import("mediabunny").catch(() => undefined);
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(warm, { timeout: 8000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const timer = window.setTimeout(warm, 4000);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return null;
+}
+
 export function AppShell() {
-  const { view, section, settings, selected, activeStream, activeChannel } = useApp();
+  const { auth, goToLogin, signOut, view, section, settings, selected, activeStream, activeChannel } = useApp();
   const [mounted, setMounted] = useState(false);
   const [collectionOpen, setCollectionOpen] = useState(false);
 
@@ -49,21 +65,6 @@ export function AppShell() {
     void import("@/lib/gamepadNav").then((mod) => mod.installGamepadNav()).catch(() => undefined);
   }, []);
 
-  // Warm the lazy player libraries during idle time so the first Play press
-  // doesn't pay their download cost. They stay out of the initial bundle.
-  useEffect(() => {
-    const warm = () => {
-      void import("hls.js").catch(() => undefined);
-      void import("mediabunny").catch(() => undefined);
-    };
-    if (typeof window.requestIdleCallback === "function") {
-      const id = window.requestIdleCallback(warm, { timeout: 8000 });
-      return () => window.cancelIdleCallback(id);
-    }
-    const timer = window.setTimeout(warm, 4000);
-    return () => window.clearTimeout(timer);
-  }, []);
-
   useEffect(() => {
     document.documentElement.style.scrollBehavior = settings.smoothScrolling ? "smooth" : "auto";
   }, [settings.smoothScrolling]);
@@ -77,16 +78,21 @@ export function AppShell() {
     );
   }
 
+  // Show the product before requesting a login. No app/profile/player screen
+  // is mounted until the signed-in account has a confirmed paid entitlement.
+  if (config.paywallEnabled && !auth) {
+    return <PaywallScreen state={null} accountId={null} isSignedIn={false} onEntitled={() => {}} onConnect={goToLogin} onSignOut={signOut} />;
+  }
   if (view === "login") return <LoginScreen />;
-  if (view === "profiles") return <ProfileSelectionScreen />;
 
   const accent = ACCENTS[settings.accentColor] ?? ACCENTS.arctic;
 
-  // Between profile selection and the app: web membership gate. Off unless
-  // NEXT_PUBLIC_PAYWALL_ENABLED=true, so nothing changes for users until you
-  // flip it. The APK never mounts this.
+  // Both profile selection and the application are behind the hosted gate.
+  // Self-hosted distributions and the Android app remain unchanged.
   return (
     <EntitlementGate>
+    <PaidPlayerWarmup />
+    {view === "profiles" ? <ProfileSelectionScreen /> :
     <main
       className={`app-shell ${settings.oledBlack ? "oled" : ""} ${settings.spoilerBlur ? "spoiler-blur" : ""}`}
       style={{ ["--accent" as string]: accent }}
@@ -116,6 +122,7 @@ export function AppShell() {
       <BackHandler />
       <Toast />
     </main>
+    }
     </EntitlementGate>
   );
 }

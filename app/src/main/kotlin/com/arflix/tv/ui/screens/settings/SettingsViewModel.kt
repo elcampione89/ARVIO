@@ -41,6 +41,7 @@ import com.arflix.tv.data.model.StreamIntegrationConfig
 import com.arflix.tv.data.model.StreamIntegrationType
 import com.arflix.tv.data.model.StreamProviderItem
 import com.arflix.tv.data.repository.AuthRepository
+import com.arflix.tv.data.repository.YouTubeCollection
 import com.arflix.tv.data.repository.AuthState
 import com.arflix.tv.data.repository.CatalogDiscoveryRepository
 import com.arflix.tv.data.repository.CatalogRepository
@@ -238,6 +239,8 @@ data class SettingsUiState(
     /** 0 keeps the fixed row height; 6..10 divides the TV guide into that many rows. */
     val guideRowCount: Int = 0,
     val trailerInCards: Boolean = true,
+    val netflixHomeStyle: Boolean = true,
+    val watchlistOnHome: Boolean = false,
     val showBudget: Boolean = true,
     val showEpisodeRatings: Boolean = false,
     val animeStructuringStyle: AnimeStructuringStyle = AnimeStructuringStyle.BROADCAST,
@@ -248,6 +251,7 @@ data class SettingsUiState(
     val volumeBoostDb: Int = 0,
     val showLoadingStats: Boolean = true,
     val diagnosticsSharingEnabled: Boolean = true,
+    val usageStatisticsEnabled: Boolean = false,
     val includeSpecials: Boolean = false,
     val isLoggedIn: Boolean = false,
     val accountEmail: String? = null,
@@ -356,6 +360,10 @@ data class SettingsUiState(
     val showUnknownSourcesDialog: Boolean = false,
     // Catalogs
     val catalogs: List<CatalogConfig> = emptyList(),
+    val pendingYouTubeUrl: String? = null,
+    val youTubeApprovalProfileId: String? = null,
+    val youTubeApprovalError: SettingsMessage? = null,
+    val youTubeApprovalFailures: Int = 0,
     val catalogSearchQuery: String = "",
     val catalogSearchResults: List<CatalogDiscoveryResult> = emptyList(),
     val isCatalogSearching: Boolean = false,
@@ -468,6 +476,22 @@ class SettingsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
+    private val preferenceWriter by lazy {
+        SettingsPreferenceWriter(context.settingsDataStore, _uiState, viewModelScope,
+            profileId = profileManager::getProfileIdSync,
+            onSaved = { syncLocalStateToCloud(silent = true) },
+            onFailure = { error ->
+                AppLogger.recordException(error, mapOf("error_area" to "Settings", "action" to "savePreference"))
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = SettingsMessage.Res(R.string.settings_preference_save_failed),
+                    toastType = ToastType.ERROR)
+            },
+            onSyncFailure = { error ->
+                AppLogger.recordException(error, mapOf("error_area" to "Settings", "action" to "syncPreference"))
+            },
+            onCommitted = cloudSyncRepository::markLocalStateDirty)
+    }
+    private var settingsCloudSyncJob: Job? = null
 
     private fun contentLanguageKey() = profileManager.profileStringKey("content_language")
 
@@ -492,6 +516,8 @@ class SettingsViewModel @Inject constructor(
     private fun trailerDelayKey() = profileManager.profileStringKey("trailer_delay_seconds")
     private fun guideRowCountKey() = profileManager.profileStringKey("guide_row_count")
     private fun trailerInCardsKey() = profileManager.profileBooleanKey("trailer_in_cards")
+    private fun netflixHomeStyleKey() = profileManager.profileBooleanKey(com.arflix.tv.ui.screens.home.NETFLIX_HOME_STYLE_KEY)
+    private fun watchlistOnHomeKey() = profileManager.profileBooleanKey(com.arflix.tv.util.WATCHLIST_ON_HOME)
     private fun showBudgetKey() = profileManager.profileBooleanKey("show_budget_on_home")
     private fun showEpisodeRatingsKey() = profileManager.profileBooleanKey("show_episode_ratings")
     private fun animeStructuringStyleKey() = profileManager.profileStringKey(AnimeStructuringStyle.PREFERENCE_KEY)
@@ -604,7 +630,8 @@ class SettingsViewModel @Inject constructor(
 
     init {
         _uiState.value = _uiState.value.copy(
-            diagnosticsSharingEnabled = DiagnosticsManager.isReportingEnabled(context)
+            diagnosticsSharingEnabled = DiagnosticsManager.isReportingEnabled(context),
+            usageStatisticsEnabled = DiagnosticsManager.isUsageEnabled(context)
         )
         loadSettings()
         observeProfileChanges()
@@ -687,6 +714,11 @@ class SettingsViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(diagnosticsSharingEnabled = enabled)
     }
 
+    fun setUsageStatisticsEnabled(enabled: Boolean) {
+        DiagnosticsManager.setUsageEnabled(context, enabled)
+        _uiState.value = _uiState.value.copy(usageStatisticsEnabled = enabled)
+    }
+
     private fun loadSettings() {
         loadSettingsJob?.cancel()
         integrationMetadataJob?.cancel()
@@ -718,12 +750,14 @@ class SettingsViewModel @Inject constructor(
             val autoPlayMinQuality = normalizeAutoPlayMinQuality(prefs[autoPlayMinQualityKey()])
             val autoPlayMaxQuality = AutoplayLimits.normalizeQuality(prefs[profileManager.profileStringKey("auto_play_max_quality")])
             val autoPlayMaxSizeGb = AutoplayLimits.normalizeSizeGb(prefs[profileManager.profileIntKey("auto_play_max_size_gb")] ?: 0)
-            val trailerAutoPlay = prefs[trailerAutoPlayKey()] ?: true
+            val trailerAutoPlay = prefs[trailerAutoPlayKey()] ?: false
             val trailerSoundEnabled = prefs[trailerSoundEnabledKey()] ?: false
             val trailerDelaySeconds = prefs[trailerDelayKey()]?.toIntOrNull() ?: 1
             val guideRowCount = prefs[guideRowCountKey()]?.toIntOrNull()
                 ?.takeIf { it in 6..10 } ?: 0
-            val trailerInCards = prefs[trailerInCardsKey()] ?: true
+            val trailerInCards = prefs[trailerInCardsKey()] ?: false
+            val netflixHomeStyle = prefs[netflixHomeStyleKey()] ?: true
+            val watchlistOnHome = prefs[watchlistOnHomeKey()] ?: false
             val spoilerBlurEnabled = prefs[spoilerBlurKey()] ?: false
             val showBudget = prefs[showBudgetKey()] ?: true
             val showEpisodeRatings = prefs[showEpisodeRatingsKey()] ?: false
@@ -843,6 +877,8 @@ class SettingsViewModel @Inject constructor(
                 trailerDelaySeconds = trailerDelaySeconds,
                 guideRowCount = guideRowCount,
                 trailerInCards = trailerInCards,
+                netflixHomeStyle = netflixHomeStyle,
+                watchlistOnHome = watchlistOnHome,
                 showBudget = showBudget,
                 showEpisodeRatings = showEpisodeRatings,
                 animeStructuringStyle = animeStructuringStyle,
@@ -1033,6 +1069,7 @@ class SettingsViewModel @Inject constructor(
             profileManager.activeProfileId.collect { profileId ->
                 if (observedProfileId == profileId) return@collect
                 observedProfileId = profileId
+                dismissYouTubeApproval()
                 cancelMdbListAuth()
                 hasObservedIptvConfig = false
                 lastObservedIptvConfigSignature = null
@@ -1641,27 +1678,14 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setAutoPlayNext(enabled: Boolean) {
-        viewModelScope.launch {
-            // Save locally
-            context.settingsDataStore.edit { prefs ->
-                prefs[autoPlayNextKey()] = enabled
-            }
-            _uiState.value = _uiState.value.copy(autoPlayNext = enabled)
-
-            // Sync to cloud
-            authRepository.saveAutoPlayNextToProfile(enabled)
+        preferenceWriter.save(autoPlayNextKey(), enabled, { it.autoPlayNext }, { state, value -> state.copy(autoPlayNext = value) }) {
             syncLocalStateToCloud(silent = true)
+            authRepository.saveAutoPlayNextToProfile(enabled)
         }
     }
 
     fun setAutoPlaySingleSource(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { prefs ->
-                prefs[autoPlaySingleSourceKey()] = enabled
-            }
-            _uiState.value = _uiState.value.copy(autoPlaySingleSource = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(autoPlaySingleSourceKey(), enabled, { it.autoPlaySingleSource }, { state, value -> state.copy(autoPlaySingleSource = value) })
     }
 
     fun setSecondarySubtitle(language: String) {
@@ -1675,23 +1699,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setFilterSubtitlesByLanguage(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { prefs ->
-                prefs[filterSubtitlesByLanguageKey()] = enabled
-            }
-            _uiState.value = _uiState.value.copy(filterSubtitlesByLanguage = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(filterSubtitlesByLanguageKey(), enabled, { it.filterSubtitlesByLanguage }, { state, value -> state.copy(filterSubtitlesByLanguage = value) })
     }
 
     fun setUseForcedSubtitles(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { prefs ->
-                prefs[useForcedSubtitlesKey()] = enabled
-            }
-            _uiState.value = _uiState.value.copy(useForcedSubtitles = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(useForcedSubtitlesKey(), enabled, { it.useForcedSubtitles }, { state, value -> state.copy(useForcedSubtitles = value) })
     }
 
     fun cycleAutoPlayMinQuality() {
@@ -1812,23 +1824,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setSkipProfileSelection(skip: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { prefs ->
-                prefs[com.arflix.tv.util.SKIP_PROFILE_SELECTION_KEY] = skip
-            }
-            _uiState.value = _uiState.value.copy(skipProfileSelection = skip)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(com.arflix.tv.util.SKIP_PROFILE_SELECTION_KEY, skip, { it.skipProfileSelection }, { state, value -> state.copy(skipProfileSelection = value) })
     }
 
     fun setOledBlackBackground(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { prefs ->
-                prefs[com.arflix.tv.util.OLED_BLACK_BACKGROUND_KEY] = enabled
-            }
-            _uiState.value = _uiState.value.copy(oledBlackBackground = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(com.arflix.tv.util.OLED_BLACK_BACKGROUND_KEY, enabled, { it.oledBlackBackground }, { state, value -> state.copy(oledBlackBackground = value) })
     }
 
     fun cycleFrameRateMatchingMode() {
@@ -1843,13 +1843,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setFrameRateMatchingMode(mode: String) {
         val normalized = normalizeFrameRateMode(mode)
-        viewModelScope.launch {
-            context.settingsDataStore.edit { prefs ->
-                prefs[frameRateMatchingModeKey()] = normalized
-            }
-            _uiState.value = _uiState.value.copy(frameRateMatchingMode = normalized)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(frameRateMatchingModeKey(), normalized, { it.frameRateMatchingMode }, { state, value -> state.copy(frameRateMatchingMode = value) })
     }
 
     private fun normalizeFrameRateMode(raw: String?): String {
@@ -1872,23 +1866,27 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setSpoilerBlurEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[spoilerBlurKey()] = enabled }
-            _uiState.value = _uiState.value.copy(spoilerBlurEnabled = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(spoilerBlurKey(), enabled, { it.spoilerBlurEnabled }, { state, value -> state.copy(spoilerBlurEnabled = value) })
     }
 
     fun setTrailerAutoPlay(enabled: Boolean) {
-        viewModelScope.launch { context.settingsDataStore.edit { it[trailerAutoPlayKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerAutoPlay = enabled); syncLocalStateToCloud(silent = true) }
+        preferenceWriter.save(trailerAutoPlayKey(), enabled, { it.trailerAutoPlay }, { state, value -> state.copy(trailerAutoPlay = value) })
     }
 
     fun setTrailerSoundEnabled(enabled: Boolean) {
-        viewModelScope.launch { context.settingsDataStore.edit { it[trailerSoundEnabledKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerSoundEnabled = enabled); syncLocalStateToCloud(silent = true) }
+        preferenceWriter.save(trailerSoundEnabledKey(), enabled, { it.trailerSoundEnabled }, { state, value -> state.copy(trailerSoundEnabled = value) })
     }
 
     fun setTrailerInCards(enabled: Boolean) {
-        viewModelScope.launch { context.settingsDataStore.edit { it[trailerInCardsKey()] = enabled }; _uiState.value = _uiState.value.copy(trailerInCards = enabled); syncLocalStateToCloud(silent = true) }
+        preferenceWriter.save(trailerInCardsKey(), enabled, { it.trailerInCards }, { state, value -> state.copy(trailerInCards = value) })
+    }
+
+    fun setNetflixHomeStyle(enabled: Boolean) {
+        preferenceWriter.save(netflixHomeStyleKey(), enabled, { it.netflixHomeStyle }, { state, value -> state.copy(netflixHomeStyle = value) })
+    }
+
+    fun setWatchlistOnHome(enabled: Boolean) {
+        preferenceWriter.save(watchlistOnHomeKey(), enabled, { it.watchlistOnHome }, { state, value -> state.copy(watchlistOnHome = value) })
     }
 
     fun cycleGuideRowCount() {
@@ -1897,11 +1895,7 @@ class SettingsViewModel @Inject constructor(
             10 -> 0
             else -> 6
         }
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[guideRowCountKey()] = next.toString() }
-            _uiState.value = _uiState.value.copy(guideRowCount = next)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(guideRowCountKey(), next.toString(), { it.guideRowCount.toString() }, { state, value -> state.copy(guideRowCount = value.toInt()) })
     }
 
     fun cycleTrailerDelay() {
@@ -1912,35 +1906,19 @@ class SettingsViewModel @Inject constructor(
             3 -> 5
             else -> 0
         }
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[trailerDelayKey()] = next.toString() }
-            _uiState.value = _uiState.value.copy(trailerDelaySeconds = next)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(trailerDelayKey(), next.toString(), { it.trailerDelaySeconds.toString() }, { state, value -> state.copy(trailerDelaySeconds = value.toInt()) })
     }
 
     fun setShowBudget(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[showBudgetKey()] = enabled }
-            _uiState.value = _uiState.value.copy(showBudget = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(showBudgetKey(), enabled, { it.showBudget }, { state, value -> state.copy(showBudget = value) })
     }
 
     fun setIptvFavoritesOnHome(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[iptvFavoritesOnHomeKey()] = enabled }
-            _uiState.value = _uiState.value.copy(iptvFavoritesOnHome = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(iptvFavoritesOnHomeKey(), enabled, { it.iptvFavoritesOnHome }, { state, value -> state.copy(iptvFavoritesOnHome = value) })
     }
 
     fun setShowEpisodeRatings(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[showEpisodeRatingsKey()] = enabled }
-            _uiState.value = _uiState.value.copy(showEpisodeRatings = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(showEpisodeRatingsKey(), enabled, { it.showEpisodeRatings }, { state, value -> state.copy(showEpisodeRatings = value) })
     }
 
     fun setAnimeStructuringStyle(style: AnimeStructuringStyle) {
@@ -1958,49 +1936,28 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setSmoothScrolling(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[smoothScrollingKey()] = enabled }
-            _uiState.value = _uiState.value.copy(smoothScrolling = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(smoothScrollingKey(), enabled, { it.smoothScrolling }, { state, value -> state.copy(smoothScrolling = value) })
     }
 
     fun setVodSearchEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[IPTV_VOD_SEARCH_ENABLED_KEY] = enabled }
-            _uiState.value = _uiState.value.copy(vodSearchEnabled = enabled)
-        }
+        preferenceWriter.save(IPTV_VOD_SEARCH_ENABLED_KEY, enabled, { it.vodSearchEnabled }, { state, value -> state.copy(vodSearchEnabled = value) }, sync = false)
     }
 
     fun setEpgVodActionsEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[IPTV_EPG_VOD_ACTIONS_ENABLED_KEY] = enabled }
-            _uiState.value = _uiState.value.copy(epgVodActionsEnabled = enabled)
-        }
+        preferenceWriter.save(IPTV_EPG_VOD_ACTIONS_ENABLED_KEY, enabled, { it.epgVodActionsEnabled }, { state, value -> state.copy(epgVodActionsEnabled = value) }, sync = false)
     }
 
     fun setFallbackChannelLogosEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[IPTV_FALLBACK_LOGOS_ENABLED_KEY] = enabled }
-            _uiState.value = _uiState.value.copy(fallbackChannelLogosEnabled = enabled)
-        }
+        preferenceWriter.save(IPTV_FALLBACK_LOGOS_ENABLED_KEY, enabled, { it.fallbackChannelLogosEnabled }, { state, value -> state.copy(fallbackChannelLogosEnabled = value) }, sync = false)
     }
 
     fun setShowLoadingStats(enabled: Boolean) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[showLoadingStatsKey()] = enabled }
-            _uiState.value = _uiState.value.copy(showLoadingStats = enabled)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(showLoadingStatsKey(), enabled, { it.showLoadingStats }, { state, value -> state.copy(showLoadingStats = value) })
     }
 
     fun cycleClockFormat() {
         val next = if (_uiState.value.clockFormat == "24h") "12h" else "24h"
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[clockFormatKey()] = next }
-            _uiState.value = _uiState.value.copy(clockFormat = next)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(clockFormatKey(), next, { it.clockFormat }, { state, value -> state.copy(clockFormat = value) })
     }
 
     /**
@@ -2035,49 +1992,37 @@ class SettingsViewModel @Inject constructor(
             current < 15 -> 15
             else -> 0
         }
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[volumeBoostDbKey()] = next.toString() }
-            _uiState.value = _uiState.value.copy(volumeBoostDb = next)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(volumeBoostDbKey(), next.toString(), { it.volumeBoostDb.toString() }, { state, value -> state.copy(volumeBoostDb = value.toInt()) })
     }
 
     fun cycleSubtitleSize() {
         val next = when (_uiState.value.subtitleSize) { "Small" -> "Medium"; "Medium" -> "Large"; "Large" -> "Extra Large"; else -> "Small" }
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleSizeKey()] = next }; _uiState.value = _uiState.value.copy(subtitleSize = next); syncLocalStateToCloud(silent = true) }
+        preferenceWriter.save(subtitleSizeKey(), next, { it.subtitleSize }, { state, value -> state.copy(subtitleSize = value) })
     }
 
     fun cycleSubtitleColor() {
         val next = when (_uiState.value.subtitleColor) { "White" -> "Yellow"; "Yellow" -> "Green"; "Green" -> "Cyan"; else -> "White" }
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleColorKey()] = next }; _uiState.value = _uiState.value.copy(subtitleColor = next); syncLocalStateToCloud(silent = true) }
+        preferenceWriter.save(subtitleColorKey(), next, { it.subtitleColor }, { state, value -> state.copy(subtitleColor = value) })
     }
 
     fun cycleSubtitleOffset() {
         val next = when (_uiState.value.subtitleOffset) { "Bottom" -> "Low"; "Low" -> "Medium"; "Medium" -> "High"; else -> "Bottom" }
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleOffsetKey()] = next }; _uiState.value = _uiState.value.copy(subtitleOffset = next); syncLocalStateToCloud(silent = true) }
+        preferenceWriter.save(subtitleOffsetKey(), next, { it.subtitleOffset }, { state, value -> state.copy(subtitleOffset = value) })
     }
 
     fun cycleSubtitleStyle() {
         val next = when (_uiState.value.subtitleStyle) { "Bold" -> "Normal"; "Normal" -> "Background"; else -> "Bold" }
-        viewModelScope.launch { context.settingsDataStore.edit { it[subtitleStyleKey()] = next }; _uiState.value = _uiState.value.copy(subtitleStyle = next); syncLocalStateToCloud(silent = true) }
+        preferenceWriter.save(subtitleStyleKey(), next, { it.subtitleStyle }, { state, value -> state.copy(subtitleStyle = value) })
     }
 
     fun cycleSubtitleFont() {
         val next = SubtitleFontOption.nextPreference(_uiState.value.subtitleFont)
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[subtitleFontKey()] = next }
-            _uiState.value = _uiState.value.copy(subtitleFont = next)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(subtitleFontKey(), next, { it.subtitleFont }, { state, value -> state.copy(subtitleFont = value) })
     }
 
     fun toggleSubtitleStylized() {
         val next = !_uiState.value.subtitleStylized
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[subtitleStylizedKey()] = next }
-            _uiState.value = _uiState.value.copy(subtitleStylized = next)
-            syncLocalStateToCloud(silent = true)
-        }
+        preferenceWriter.save(subtitleStylizedKey(), next, { it.subtitleStylized }, { state, value -> state.copy(subtitleStylized = value) })
     }
 
     // -- AI Subtitles ---------------------------------------------------------
@@ -2981,6 +2926,11 @@ class SettingsViewModel @Inject constructor(
             requestAddonInstall(url, fromLink = false)
             return
         }
+        // A YouTube video link goes into the profile's own YouTube row.
+        if (YouTubeCollection.videoIdFromUrl(url) != null) {
+            addYouTubeVideo(url)
+            return
+        }
         viewModelScope.launch {
             val result = catalogRepository.addCustomCatalog(url)
             result.onSuccess { catalog ->
@@ -2997,6 +2947,83 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = error.orCatalogMessage(
                         SettingsMessage.Res(R.string.catalog_failed_add)
                     ),
+                    toastType = ToastType.ERROR
+                )
+            }
+        }
+    }
+
+    fun addYouTubeVideo(url: String) {
+        val profileId = profileManager.getProfileIdSync()
+        viewModelScope.launch {
+            val profile = profileRepository.getActiveProfile()
+            if (profileManager.getProfileIdSync() != profileId) return@launch
+            if (profile?.isKidsProfile == true) {
+                _uiState.value = _uiState.value.copy(
+                    pendingYouTubeUrl = url,
+                    youTubeApprovalProfileId = profileId,
+                    youTubeApprovalError = null
+                )
+            } else {
+                performYouTubeAddition(url, profileId)
+            }
+        }
+    }
+
+    fun dismissYouTubeApproval() {
+        _uiState.value = _uiState.value.copy(pendingYouTubeUrl = null, youTubeApprovalProfileId = null, youTubeApprovalError = null)
+    }
+
+    fun confirmYouTubeAddition(pin: String) {
+        val state = _uiState.value
+        val url = state.pendingYouTubeUrl ?: return
+        val profileId = state.youTubeApprovalProfileId ?: return
+        viewModelScope.launch { performYouTubeAddition(url, profileId, pin) }
+    }
+
+    private suspend fun performYouTubeAddition(url: String, profileId: String, pin: String? = null) {
+        catalogRepository.addYouTubeVideo(url, parentPin = pin, targetProfileId = profileId).onSuccess { (_, title) ->
+            dismissYouTubeApproval()
+            _uiState.value = _uiState.value.copy(
+                toastMessage = SettingsMessage.Res(R.string.settings_catalog_added, listOf(title)),
+                toastType = ToastType.SUCCESS
+            )
+            syncLocalStateToCloud(silent = true)
+        }.onFailure { error ->
+            if (error is CatalogException && error.messageRes == R.string.youtube_parent_approval_required) {
+                _uiState.value = _uiState.value.copy(
+                    youTubeApprovalError = SettingsMessage.Res(error.messageRes),
+                    youTubeApprovalFailures = _uiState.value.youTubeApprovalFailures + 1
+                )
+                return@onFailure
+            }
+            dismissYouTubeApproval()
+            _uiState.value = _uiState.value.copy(
+                toastMessage = error.orCatalogMessage(SettingsMessage.Res(R.string.catalog_failed_add)),
+                toastType = ToastType.ERROR
+            )
+        }
+    }
+
+    internal fun moveYouTubeVideo(catalogId: String, video: YouTubeCollection.Video, delta: Int) {
+        viewModelScope.launch {
+            catalogRepository.moveYouTubeVideo(catalogId, video.id, delta).onSuccess {
+                syncLocalStateToCloud(silent = true)
+            }
+        }
+    }
+
+    internal fun removeYouTubeVideo(catalogId: String, video: YouTubeCollection.Video) {
+        viewModelScope.launch {
+            catalogRepository.removeYouTubeVideo(catalogId, video.id).onSuccess {
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = SettingsMessage.Res(R.string.youtube_video_removed, listOf(video.title)),
+                    toastType = ToastType.SUCCESS
+                )
+                syncLocalStateToCloud(silent = true)
+            }.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = error.orCatalogMessage(SettingsMessage.Res(R.string.catalog_not_found)),
                     toastType = ToastType.ERROR
                 )
             }
@@ -4285,7 +4312,8 @@ class SettingsViewModel @Inject constructor(
 
     fun syncLocalStateToCloud(silent: Boolean = false, force: Boolean = false) {
         if (!force && !_uiState.value.isLoggedIn) return
-        viewModelScope.launch {
+        if (silent && !force) settingsCloudSyncJob?.cancel()
+        val job = viewModelScope.launch {
             if (!ensureCloudSyncSession()) return@launch
             if (force) {
                 cloudSyncRepository.markLocalStateDirtyNow()
@@ -4315,6 +4343,7 @@ class SettingsViewModel @Inject constructor(
                 )
             }
         }
+        if (silent && !force) settingsCloudSyncJob = job
     }
 
     fun syncCloudStateToLocal(silent: Boolean = false) {
@@ -5439,6 +5468,9 @@ class SettingsViewModel @Inject constructor(
                 toastMessage = SettingsMessage.Res(R.string.settings_signed_out),
                 toastType = ToastType.SUCCESS
             )
+            // Repositories still hold the signed-out account in memory (addons, IPTV, rows).
+            // A fresh process is the one state that cannot leak any of it into the next sign-in.
+            com.arflix.tv.util.restartApp(context)
         }
     }
 

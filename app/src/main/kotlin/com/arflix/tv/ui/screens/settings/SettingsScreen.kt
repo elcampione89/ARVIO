@@ -86,6 +86,7 @@ import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Link
@@ -169,6 +170,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -210,6 +212,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.arflix.tv.ui.components.SettingsRow
 import com.arflix.tv.ui.components.SettingsToggleRow
+import com.arflix.tv.ui.components.settingsFocusOutline
 import com.arflix.tv.ui.components.localizeSettingValue
 import androidx.core.widget.doAfterTextChanged
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -226,6 +229,7 @@ import com.arflix.tv.data.model.settingsPageUrl
 import com.arflix.tv.data.model.effectivePackName
 import com.arflix.tv.data.model.isBulkDeletablePack
 import com.arflix.tv.data.model.CatalogSourceType
+import com.arflix.tv.data.repository.YouTubeCollection
 import com.arflix.tv.data.model.QualityFilterConfig
 import com.arflix.tv.data.model.RuntimeKind
 import com.arflix.tv.data.model.StalkerCatalogKind
@@ -298,7 +302,7 @@ private const val PRIVACY_POLICY_URL = "https://arvio.tv/privacy"
 
 private fun isRepeatedSettingsSelect(event: androidx.compose.ui.input.key.KeyEvent): Boolean =
     event.type == KeyEventType.KeyDown &&
-        (event.key == Key.Enter || event.key == Key.DirectionCenter) &&
+        (event.key == Key.Enter || event.key == Key.DirectionCenter || event.key == Key.NumPadEnter) &&
         event.nativeKeyEvent.repeatCount > 0
 
 /**
@@ -328,7 +332,7 @@ private fun tvGeneralRowsForSection(section: String): List<Int> {
             listOf(39, 9, 45)
         "ai_subtitles" -> listOf(28, 29, 30, 31, 32, 33)
         "playback" -> listOf(10, 11, 12, 43, 44, 13, 14, 34, 37, 16, 15, 40, 27)
-        "appearance" -> listOf(17, 18, 20, 21, 24, 23, 22, 41, 46, 36, 47)
+        "appearance" -> listOf(17, 49, 50, 18, 20, 21, 24, 23, 22, 41, 46, 36, 47)
         "profiles" -> listOf(19)
         // 49/50: VPN switch and location, only when the panel offers the VPN (Panel > VPN).
         "network" -> (if (com.arflix.tv.vpn.VpnController.state.value.offered) listOf(49, 50) else emptyList()) +
@@ -644,6 +648,9 @@ fun SettingsScreen(
     var showIptvCategoriesSettings by remember { mutableStateOf(false) }
     // Rename dialog state
     var showCatalogRename by remember { mutableStateOf(false) }
+    var youTubeManagerCatalogId by remember { mutableStateOf<String?>(null) }
+    var showYouTubeAddInput by remember { mutableStateOf(false) }
+    var youTubeAddUrl by remember { mutableStateOf("") }
     var renameCatalogId by remember { mutableStateOf("") }
     var renameCatalogTitle by remember { mutableStateOf("") }
 
@@ -765,13 +772,13 @@ fun SettingsScreen(
             "catalogs" -> uiState.catalogs.size + 2 // Add + Import + Built-in collections toggle + catalogs
             "stremio" -> stremioAddons.size + 2 // rows + refresh + community + add button
             "plugins" -> pluginsMaxIndex
-            "accounts" -> 16 // Includes About & Credits.
+            "accounts" -> 17 // Includes About & Credits and device-local usage opt-in.
             else -> 0
         }
     }
 
     val focusRequester = remember { FocusRequester() }
-    val scrollState = rememberScrollState()
+    val scrollState = key(sectionIndex, showIptvCategoriesSettings) { rememberScrollState() }
     val sectionScrollState = rememberScrollState()
     val focusTracker = remember(sectionIndex, showIptvCategoriesSettings) { SettingsFocusTracker() }
     val sectionFocusTracker = remember { SettingsFocusTracker() }
@@ -824,10 +831,6 @@ fun SettingsScreen(
         showUiModeWarningDialog = true
     }
 
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-    }
-
     LaunchedEffect(sections.size) {
         if (sectionIndex > sections.lastIndex) {
             sectionIndex = sections.lastIndex.coerceAtLeast(0)
@@ -875,12 +878,6 @@ fun SettingsScreen(
     LaunchedEffect(sectionIndex, uiState.catalogs.size) {
         if (sections[sectionIndex] == "catalogs") {
             contentFocusIndex = contentFocusIndex.coerceAtMost(uiState.catalogs.size + 2)
-        }
-    }
-
-    LaunchedEffect(sectionIndex) {
-        if (scrollState.value != 0) {
-            scrollState.scrollTo(0)
         }
     }
 
@@ -988,7 +985,7 @@ fun SettingsScreen(
         }
     }
 
-    val hasBlockingModal =
+    val hasBlockingModal by remember { derivedStateOf {
         showCustomAddonInput ||
         showCommunityAddons ||
         showIptvInput ||
@@ -998,12 +995,19 @@ fun SettingsScreen(
         showPlexHomeServerInput ||
         showCatalogInput ||
         showCatalogRename ||
+        youTubeManagerCatalogId != null ||
+        showYouTubeAddInput ||
+        uiState.pendingYouTubeUrl != null ||
         showSubtitlePicker ||
         showSecondarySubtitlePicker ||
         showAudioLanguagePicker ||
         showDnsProviderPicker ||
         showContentLanguagePicker ||
         showUiModeWarningDialog ||
+        showQualityFiltersModal ||
+        showQualityFilterEditor ||
+        showCredits ||
+        addonConfigureTarget != null ||
         showAiModelDialog ||
         showAiApiKeyDialog ||
         showCustomUserAgentDialog ||
@@ -1026,6 +1030,9 @@ fun SettingsScreen(
         uiState.packError != null ||
         uiState.pendingPackManifest != null ||
         pluginsModalOpen
+    } }
+
+    val inputFocusModifier = rememberSettingsInputFocusModifier(focusRequester, !isTouchDevice, hasBlockingModal)
 
     // Same D-pad repeat throttle as Home and Details, so holding a direction
     // key walks the settings lists at a readable pace instead of blurring.
@@ -1080,6 +1087,7 @@ fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(appBackgroundDark())
+            .then(inputFocusModifier)
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
@@ -1088,6 +1096,10 @@ fun SettingsScreen(
 
                 // One physical OK press is one action, even when a remote repeats it.
                 if (isRepeatedSettingsSelect(event)) return@onPreviewKeyEvent true
+                if (event.type == KeyEventType.KeyUp &&
+                    (event.key == Key.Enter || event.key == Key.DirectionCenter || event.key == Key.NumPadEnter)) {
+                    return@onPreviewKeyEvent true
+                }
 
                 if (event.type == KeyEventType.KeyUp && isArvioDpadNavigationKey(event.key)) {
                     dpadRepeatGate.reset()
@@ -1398,7 +1410,7 @@ fun SettingsScreen(
                             }
                             true
                         }
-                        Key.Enter, Key.DirectionCenter -> {
+                        Key.Enter, Key.DirectionCenter, Key.NumPadEnter -> {
                             when (activeZone) {
                                 Zone.SIDEBAR -> {
                                     if (hasProfile && sidebarFocusIndex == 0) {
@@ -1470,6 +1482,8 @@ fun SettingsScreen(
                                                 34 -> viewModel.cycleTrailerDelay()
                                                 47 -> viewModel.cycleGuideRowCount()
                                                 37 -> viewModel.setTrailerInCards(!uiState.trailerInCards)
+                                                49 -> viewModel.setNetflixHomeStyle(!uiState.netflixHomeStyle)
+                                                50 -> viewModel.setWatchlistOnHome(!uiState.watchlistOnHome)
                                             }
                                         }
                                         "iptv" -> {
@@ -1692,9 +1706,13 @@ fun SettingsScreen(
                                                 if (catalog != null) {
                                                     when (catalogActionIndex) {
                                                         0 -> {
-                                                            renameCatalogId = catalog.id
-                                                            renameCatalogTitle = catalog.title
-                                                            showCatalogRename = true
+                                                            if (catalog.sourceType == CatalogSourceType.YOUTUBE) {
+                                                                youTubeManagerCatalogId = catalog.id
+                                                            } else {
+                                                                renameCatalogId = catalog.id
+                                                                renameCatalogTitle = catalog.title
+                                                                showCatalogRename = true
+                                                            }
                                                         }
                                                         1 -> viewModel.moveCatalogUp(catalog.id)
                                                         2 -> viewModel.moveCatalogDown(catalog.id)
@@ -1828,6 +1846,7 @@ fun SettingsScreen(
                                                 14 -> openExternalUrl(context, PRIVACY_POLICY_URL)
                                                 15 -> openExternalUrl(context, ACCOUNT_DELETION_URL)
                                                 16 -> showCredits = true
+                                                17 -> viewModel.setUsageStatisticsEnabled(!uiState.usageStatisticsEnabled)
                                             }
                                         }
                                         "plugins" -> {
@@ -1882,9 +1901,13 @@ fun SettingsScreen(
                 onAddCatalogClick = { showCatalogInput = true },
                 onImportCatalogPackClick = { showCatalogPackInput = true },
                 onRenameCatalogClick = { catalog ->
-                    renameCatalogId = catalog.id
-                    renameCatalogTitle = catalog.title
-                    showCatalogRename = true
+                    if (catalog.sourceType == CatalogSourceType.YOUTUBE) {
+                        youTubeManagerCatalogId = catalog.id
+                    } else {
+                        renameCatalogId = catalog.id
+                        renameCatalogTitle = catalog.title
+                        showCatalogRename = true
+                    }
                 },
                 onDeleteCatalogClick = { catalog ->
                     if (catalog.isBulkDeletablePack) {
@@ -2088,6 +2111,10 @@ fun SettingsScreen(
                             onTrailerSoundEnabledToggle = { viewModel.setTrailerSoundEnabled(it) },
                             trailerInCards = uiState.trailerInCards,
                             onTrailerInCardsToggle = { viewModel.setTrailerInCards(it) },
+                            netflixHomeStyle = uiState.netflixHomeStyle,
+                            onNetflixHomeStyleToggle = { viewModel.setNetflixHomeStyle(it) },
+                            watchlistOnHome = uiState.watchlistOnHome,
+                            onWatchlistOnHomeToggle = viewModel::setWatchlistOnHome,
                             trailerDelaySeconds = uiState.trailerDelaySeconds,
                             onTrailerDelayClick = { viewModel.cycleTrailerDelay() },
                             guideRowCount = uiState.guideRowCount,
@@ -2408,9 +2435,13 @@ fun SettingsScreen(
                             builtInCollectionsEnabled = uiState.builtInCollectionsEnabled,
                             onToggleBuiltInCollections = { viewModel.toggleBuiltInCollections() },
                             onRenameCatalog = { catalog ->
-                                renameCatalogId = catalog.id
-                                renameCatalogTitle = catalog.title
-                                showCatalogRename = true
+                                if (catalog.sourceType == CatalogSourceType.YOUTUBE) {
+                                    youTubeManagerCatalogId = catalog.id
+                                } else {
+                                    renameCatalogId = catalog.id
+                                    renameCatalogTitle = catalog.title
+                                    showCatalogRename = true
+                                }
                             },
                             onMoveCatalogUp = { catalog -> viewModel.moveCatalogUp(catalog.id) },
                             onMoveCatalogDown = { catalog -> viewModel.moveCatalogDown(catalog.id) },
@@ -2457,6 +2488,7 @@ fun SettingsScreen(
                             isForceCloudSyncing = uiState.isForceCloudSyncing,
                             lastCloudSyncStatus = uiState.lastCloudSyncStatus?.localizedText(),
                             diagnosticsSharingEnabled = uiState.diagnosticsSharingEnabled,
+                            usageStatisticsEnabled = uiState.usageStatisticsEnabled,
                             isSelfUpdateSupported = uiState.isSelfUpdateSupported,
                             updateStatus = uiState.updateStatus,
                             focusedIndex = if (activeZone == Zone.CONTENT) contentFocusIndex else -1,
@@ -2487,6 +2519,7 @@ fun SettingsScreen(
                             onCheckUpdates = { viewModel.checkForAppUpdates(force = true, showNoUpdateFeedback = true) },
                             onInstallUpdate = { viewModel.installAppUpdateOrRequestPermission() },
                             onDiagnosticsSharingToggle = viewModel::setDiagnosticsSharingEnabled,
+                            onUsageStatisticsToggle = viewModel::setUsageStatisticsEnabled,
                             onOpenPrivacy = { openExternalUrl(context, PRIVACY_POLICY_URL) },
                             onOpenCredits = { showCredits = true },
                             onOpenDataDeletion = { openExternalUrl(context, ACCOUNT_DELETION_URL) },
@@ -2846,6 +2879,47 @@ fun SettingsScreen(
                     showCatalogInput = false
                 }
             )
+        }
+
+        val youTubeManagerCatalog = youTubeManagerCatalogId?.let { id -> uiState.catalogs.firstOrNull { it.id == id } }
+        if (youTubeManagerCatalog != null && !showYouTubeAddInput && !showCatalogRename && uiState.pendingYouTubeUrl == null) {
+            YouTubeCollectionModal(
+                catalog = youTubeManagerCatalog,
+                onAddVideo = { youTubeAddUrl = ""; showYouTubeAddInput = true },
+                onRename = {
+                    renameCatalogId = youTubeManagerCatalog.id
+                    renameCatalogTitle = youTubeManagerCatalog.title
+                    showCatalogRename = true
+                },
+                onMoveVideo = { video, delta -> viewModel.moveYouTubeVideo(youTubeManagerCatalog.id, video, delta) },
+                onRemoveVideo = { video -> viewModel.removeYouTubeVideo(youTubeManagerCatalog.id, video) },
+                onDismiss = { youTubeManagerCatalogId = null }
+            )
+        }
+
+        if (showYouTubeAddInput) {
+            InputModal(
+                title = stringResource(R.string.youtube_add_link),
+                fields = listOf(
+                    InputField(label = stringResource(R.string.youtube_link_label), value = youTubeAddUrl, placeholder = "https://youtu.be/...", onValueChange = { youTubeAddUrl = it })
+                ),
+                onConfirm = {
+                    if (youTubeAddUrl.isNotBlank()) viewModel.addYouTubeVideo(youTubeAddUrl)
+                    showYouTubeAddInput = false
+                },
+                onDismiss = { showYouTubeAddInput = false }
+            )
+        }
+
+        if (uiState.pendingYouTubeUrl != null) {
+            androidx.compose.runtime.key(uiState.youTubeApprovalFailures) {
+                com.arflix.tv.ui.screens.profile.PinEntryDialog(
+                    title = stringResource(R.string.profile_parent_pin_enter),
+                    onPinConfirmed = viewModel::confirmYouTubeAddition,
+                    onDismiss = viewModel::dismissYouTubeApproval,
+                    pinError = uiState.youTubeApprovalError?.localizedText().orEmpty()
+                )
+            }
         }
 
         if (showCatalogRename) {
@@ -3420,7 +3494,6 @@ private fun QualityFiltersModal(
     }
 
     LaunchedEffect(hasFilters) {
-        modalFocusRequester.requestFocus()
         if (!hasFilters) {
             isFooterFocused = true
             selectedFilterIndex = -1
@@ -3446,6 +3519,7 @@ private fun QualityFiltersModal(
         ModalScrim(onDismiss = onDismiss) {
             Column(
                 modifier = Modifier
+                    .then(rememberSettingsInputFocusModifier(modalFocusRequester, enabled = true, blocked = false))
                     .width(760.dp)
                     .heightIn(max = 760.dp)
                     .background(BackgroundElevated, RoundedCornerShape(16.dp))
@@ -5775,6 +5849,14 @@ private fun MobileSettingsSubPage(
                         onClick = { viewModel.cycleTrailerDelay() }
                     )
                     MobileSettingsRow(
+                        icon = Icons.Default.Movie,
+                        title = stringResource(R.string.trailer_in_cards),
+                        value = stringResource(if (uiState.trailerInCards) R.string.on else R.string.off),
+                        toggleChecked = uiState.trailerInCards,
+                        isFocused = false,
+                        onClick = { viewModel.setTrailerInCards(!uiState.trailerInCards) }
+                    )
+                    MobileSettingsRow(
                         icon = Icons.Default.Settings,
                         title = stringResource(R.string.frame_rate),
                         value = uiState.frameRateMatchingMode,
@@ -6029,6 +6111,15 @@ private fun MobileSettingsSubPage(
             }
             "Appearance" -> {
                 MobileSettingsCategory(title = stringResource(R.string.settings_section_appearance)) {
+                    MobileSettingsRow(
+                        icon = Icons.Default.Bookmark,
+                        title = stringResource(R.string.watchlist_on_home),
+                        subtitle = stringResource(R.string.watchlist_on_home_desc),
+                        value = stringResource(if (uiState.watchlistOnHome) R.string.on else R.string.off),
+                        toggleChecked = uiState.watchlistOnHome,
+                        isFocused = false,
+                        onClick = { viewModel.setWatchlistOnHome(!uiState.watchlistOnHome) }
+                    )
                     MobileSettingsRow(
                         icon = Icons.Default.Palette,
                         title = stringResource(R.string.ui_mode),
@@ -6315,6 +6406,15 @@ private fun MobilePrivacySubPage(
 ) {
     val context = LocalContext.current
     MobileSettingsCategory(title = stringResource(R.string.settings_diagnostics_sharing).uppercase()) {
+        MobileSettingsRow(
+            icon = Icons.Default.Settings,
+            title = stringResource(R.string.settings_usage_statistics),
+            subtitle = stringResource(R.string.settings_usage_statistics_desc),
+            value = stringResource(if (uiState.usageStatisticsEnabled) R.string.on else R.string.off),
+            toggleChecked = uiState.usageStatisticsEnabled,
+            isFocused = false,
+            onClick = { viewModel.setUsageStatisticsEnabled(!uiState.usageStatisticsEnabled) }
+        )
         MobileSettingsRow(
             icon = Icons.Default.Settings,
             title = stringResource(R.string.settings_diagnostics_sharing),
@@ -6690,13 +6790,10 @@ private fun SettingsSectionItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .graphicsLayer()
             .clickable { onClick() }
             .background(bgColor, RoundedCornerShape(12.dp))
-            .border(
-                width = if (isFocused) 1.dp else 0.dp,
-                color = if (isFocused) accentColor else Color.Transparent,
-                shape = RoundedCornerShape(12.dp)
-            )
+            .settingsFocusOutline(isFocused, cornerRadius = 12.dp)
             .padding(horizontal = 9.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -7256,6 +7353,10 @@ private fun TvGeneralSettingsRows(
     onTrailerSoundEnabledToggle: (Boolean) -> Unit = {},
     trailerInCards: Boolean = true,
     onTrailerInCardsToggle: (Boolean) -> Unit = {},
+    netflixHomeStyle: Boolean = true,
+    onNetflixHomeStyleToggle: (Boolean) -> Unit = {},
+    watchlistOnHome: Boolean = false,
+    onWatchlistOnHomeToggle: (Boolean) -> Unit = {},
     trailerDelaySeconds: Int = 1,
     onTrailerDelayClick: () -> Unit = {},
     guideRowCount: Int = 0,
@@ -7420,6 +7521,8 @@ private fun TvGeneralSettingsRows(
                 47 -> SettingsRow(Icons.Default.TableRows, stringResource(R.string.guide_rows), stringResource(R.string.guide_rows_desc), if (guideRowCount == 0) stringResource(R.string.auto) else "$guideRowCount", focusedIndex == localIndex, onGuideRowCountClick, Modifier.settingsFocusSlot(localIndex))
                 35 -> SettingsRow(Icons.Default.Language, stringResource(R.string.custom_user_agent), stringResource(R.string.custom_user_agent_desc), formatUserAgentPreview(customUserAgent, 30), focusedIndex == localIndex, onCustomUserAgentClick, Modifier.settingsFocusSlot(localIndex))
                 37 -> SettingsToggleRow(stringResource(R.string.trailer_in_cards), stringResource(R.string.trailer_in_cards_desc), trailerInCards, focusedIndex == localIndex, onTrailerInCardsToggle, Modifier.settingsFocusSlot(localIndex))
+                49 -> SettingsToggleRow(stringResource(R.string.netflix_home_style), stringResource(R.string.netflix_home_style_desc), netflixHomeStyle, focusedIndex == localIndex, onNetflixHomeStyleToggle, Modifier.settingsFocusSlot(localIndex))
+                50 -> SettingsToggleRow(stringResource(R.string.watchlist_on_home), stringResource(R.string.watchlist_on_home_desc), watchlistOnHome, focusedIndex == localIndex, onWatchlistOnHomeToggle, Modifier.settingsFocusSlot(localIndex))
             }
         }
     }
@@ -7648,6 +7751,24 @@ private fun GeneralSettings(
             isFocused = focusedIndex == 12,
             onClick = onAutoPlayMinQualityClick,
             modifier = Modifier.settingsFocusSlot(12)
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        SettingsToggleRow(
+            title = stringResource(R.string.trailer_auto_play),
+            subtitle = stringResource(R.string.trailer_desc),
+            isEnabled = trailerAutoPlay,
+            isFocused = focusedIndex == 13,
+            onToggle = onTrailerAutoPlayToggle,
+            modifier = Modifier.settingsFocusSlot(13)
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        SettingsToggleRow(
+            title = stringResource(R.string.trailer_sound),
+            subtitle = stringResource(R.string.trailer_sound_desc),
+            isEnabled = trailerSoundEnabled,
+            isFocused = focusedIndex == 14,
+            onToggle = onTrailerSoundEnabledToggle,
+            modifier = Modifier.settingsFocusSlot(14)
         )
         Spacer(modifier = Modifier.height(10.dp))
         SettingsRow(
@@ -9785,6 +9906,7 @@ private fun sourceLabel(sourceType: CatalogSourceType): String {
         CatalogSourceType.PREINSTALLED -> stringResource(R.string.settings_source_builtin)
         CatalogSourceType.ADDON -> stringResource(R.string.settings_source_addon)
         CatalogSourceType.HOME_SERVER -> stringResource(R.string.settings_home_server)
+        CatalogSourceType.YOUTUBE -> "YouTube"
     }
 }
 
@@ -9862,6 +9984,7 @@ private fun CatalogsSettings(
                                     stringResource(R.string.settings_from_source, addonLabel)
                                 }
                                 catalog.sourceType == CatalogSourceType.HOME_SERVER -> stringResource(R.string.settings_from_home_server)
+                                catalog.sourceType == CatalogSourceType.YOUTUBE -> stringResource(R.string.youtube_video_count, YouTubeCollection.decode(catalog.sourceRef).size)
                                 else -> catalog.sourceUrl ?: stringResource(R.string.settings_custom_catalog)
                             }
                             "Pack: ${catalog.effectivePackName} • $baseSubtitle"
@@ -10084,6 +10207,7 @@ private fun TvCatalogSettingsRow(
                             stringResource(R.string.settings_from_source, addonLabel)
                         }
                         catalog.sourceType == CatalogSourceType.HOME_SERVER -> stringResource(R.string.settings_from_home_server)
+                        catalog.sourceType == CatalogSourceType.YOUTUBE -> stringResource(R.string.youtube_video_count, YouTubeCollection.decode(catalog.sourceRef).size)
                         else -> catalog.sourceUrl ?: stringResource(R.string.settings_custom_catalog)
                     }
                     "Pack: ${catalog.effectivePackName} • $baseSubtitle"
@@ -10575,6 +10699,7 @@ private fun AccountsSettings(
     isForceCloudSyncing: Boolean,
     lastCloudSyncStatus: String?,
     diagnosticsSharingEnabled: Boolean,
+    usageStatisticsEnabled: Boolean,
     isSelfUpdateSupported: Boolean,
     updateStatus: com.arflix.tv.updater.UpdateStatus,
     focusedIndex: Int,
@@ -10588,6 +10713,7 @@ private fun AccountsSettings(
     onCheckUpdates: () -> Unit,
     onInstallUpdate: () -> Unit,
     onDiagnosticsSharingToggle: (Boolean) -> Unit,
+    onUsageStatisticsToggle: (Boolean) -> Unit,
     onOpenPrivacy: () -> Unit,
     onOpenDataDeletion: () -> Unit,
     onOpenCredits: () -> Unit,
@@ -10864,6 +10990,15 @@ private fun AccountsSettings(
             isFocused = focusedIndex == 16,
             onClick = onOpenCredits,
             modifier = Modifier.settingsFocusSlot(16)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        SettingsToggleRow(
+            title = stringResource(R.string.settings_usage_statistics),
+            subtitle = stringResource(R.string.settings_usage_statistics_desc),
+            isEnabled = usageStatisticsEnabled,
+            isFocused = focusedIndex == 17,
+            onToggle = onUsageStatisticsToggle,
+            modifier = Modifier.settingsFocusSlot(17)
         )
     }
 }
@@ -14023,5 +14158,250 @@ private fun CatalogPackDeleteConfirmDialog(
                 }
             }
         }
+    }
+}
+
+/**
+ * Lists the videos of the profile's YouTube row (see YouTubeCollection) in Home's order, with
+ * add, rename, move and remove. On TV, Left/Right picks a video's action (up, down, remove) and
+ * OK runs it; remove needs a second OK, so a stray press cannot drop a video.
+ */
+@Composable
+private fun YouTubeCollectionModal(
+    catalog: CatalogConfig,
+    onAddVideo: () -> Unit,
+    onRename: () -> Unit,
+    onMoveVideo: (YouTubeCollection.Video, Int) -> Unit,
+    onRemoveVideo: (YouTubeCollection.Video) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val videos = remember(catalog.sourceRef) { YouTubeCollection.decode(catalog.sourceRef) }
+    // 0 = add, 1 = rename, 2.. = videos
+    var focusedIndex by remember { mutableIntStateOf(0) }
+    // Within a video row: which of its buttons OK runs.
+    var focusedAction by remember { mutableIntStateOf(VIDEO_ACTION_REMOVE) }
+    var armedVideoId by remember { mutableStateOf<String?>(null) }
+    val itemCount = 2 + videos.size
+    LaunchedEffect(itemCount) { focusedIndex = focusedIndex.coerceAtMost(itemCount - 1) }
+    val isTouchDevice = LocalDeviceType.current.isTouchDevice()
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val modalFocusRequester = remember { FocusRequester() }
+    val listState = rememberLazyListState()
+    LaunchedEffect(Unit) { modalFocusRequester.requestFocus() }
+    LaunchedEffect(focusedIndex) { runCatching { listState.animateScrollToItem(focusedIndex.coerceAtLeast(0)) } }
+
+    fun runVideoAction(videoIndex: Int, action: Int) {
+        val video = videos.getOrNull(videoIndex) ?: return
+        when (action) {
+            VIDEO_ACTION_UP, VIDEO_ACTION_DOWN -> {
+                armedVideoId = null
+                val delta = if (action == VIDEO_ACTION_UP) -1 else 1
+                if (videoIndex + delta !in videos.indices) return
+                onMoveVideo(video, delta)
+                // Focus follows the video to its new place.
+                focusedIndex = videoIndex + delta + 2
+            }
+            else -> if (isTouchDevice || armedVideoId == video.id) {
+                armedVideoId = null
+                onRemoveVideo(video)
+            } else {
+                armedVideoId = video.id
+            }
+        }
+    }
+
+    fun activate(index: Int) {
+        when (index) {
+            0 -> onAddVideo()
+            1 -> onRename()
+            else -> runVideoAction(index - 2, focusedAction)
+        }
+    }
+
+    fun stepAction(towardsLast: Boolean) {
+        if (focusedIndex < 2) return
+        armedVideoId = null
+        focusedAction = (focusedAction + if (towardsLast) 1 else -1).coerceIn(VIDEO_ACTION_UP, VIDEO_ACTION_REMOVE)
+    }
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        ModalScrim(onDismiss = onDismiss) {
+            Column(
+                modifier = Modifier
+                    .then(if (isTouchDevice) Modifier.fillMaxWidth(0.92f).widthIn(max = 640.dp) else Modifier.width(720.dp))
+                    .heightIn(max = 620.dp)
+                    .background(BackgroundElevated, RoundedCornerShape(14.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 20.dp, vertical = 18.dp)
+                    .focusRequester(modalFocusRequester)
+                    .focusable()
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (event.key) {
+                            Key.Back, Key.Escape -> { onDismiss(); true }
+                            Key.DirectionUp -> { if (focusedIndex > 0) focusedIndex--; armedVideoId = null; true }
+                            Key.DirectionDown -> { if (focusedIndex < itemCount - 1) focusedIndex++; armedVideoId = null; true }
+                            // The buttons are laid out mirrored in RTL, so keys follow what is on screen.
+                            Key.DirectionLeft -> { stepAction(towardsLast = isRtl); true }
+                            Key.DirectionRight -> { stepAction(towardsLast = !isRtl); true }
+                            Key.Enter, Key.DirectionCenter -> { activate(focusedIndex); true }
+                            else -> false
+                        }
+                    }
+            ) {
+                Text(catalog.title, style = ArflixTypography.sectionTitle, color = TextPrimary)
+                Text(
+                    text = when {
+                        videos.isEmpty() -> stringResource(R.string.youtube_no_videos)
+                        isTouchDevice -> stringResource(R.string.youtube_videos_home_order, videos.size)
+                        else -> stringResource(R.string.youtube_videos_home_order_tv, videos.size)
+                    },
+                    style = ArflixTypography.caption,
+                    color = TextSecondary.copy(alpha = 0.75f),
+                    modifier = Modifier.padding(top = 2.dp, bottom = 12.dp)
+                )
+                LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
+                    item(key = "add") {
+                        YouTubeModalRow(
+                            title = stringResource(R.string.youtube_add_link), subtitle = stringResource(R.string.youtube_add_link_desc),
+                            isFocused = focusedIndex == 0, onClick = { focusedIndex = 0; activate(0) }
+                        ) { YouTubeActionChip(Icons.Default.Add, highlighted = focusedIndex == 0, onClick = { focusedIndex = 0; activate(0) }) }
+                    }
+                    item(key = "rename") {
+                        YouTubeModalRow(
+                            title = stringResource(R.string.youtube_rename_row), subtitle = catalog.title,
+                            isFocused = focusedIndex == 1, onClick = { focusedIndex = 1; activate(1) }
+                        ) { YouTubeActionChip(Icons.Default.Edit, highlighted = focusedIndex == 1, onClick = { focusedIndex = 1; activate(1) }) }
+                    }
+                    itemsIndexed(videos, key = { _, video -> video.id }) { index, video ->
+                        val rowIndex = index + 2
+                        val rowFocused = focusedIndex == rowIndex
+                        val armed = armedVideoId == video.id
+                        fun press(action: Int) {
+                            focusedIndex = rowIndex
+                            focusedAction = action
+                            runVideoAction(index, action)
+                        }
+                        YouTubeModalRow(
+                            title = video.title,
+                            subtitle = when {
+                                armed -> stringResource(R.string.youtube_press_ok_again_remove)
+                                !rowFocused || isTouchDevice -> "${index + 1}"
+                                focusedAction == VIDEO_ACTION_UP -> stringResource(R.string.youtube_ok_move_up, index + 1)
+                                focusedAction == VIDEO_ACTION_DOWN -> stringResource(R.string.youtube_ok_move_down, index + 1)
+                                else -> stringResource(R.string.youtube_ok_remove, index + 1)
+                            },
+                            isFocused = rowFocused,
+                            danger = armed,
+                            imageUrl = YouTubeCollection.posterUrl(video.id),
+                            onClick = null
+                        ) {
+                            YouTubeActionChip(
+                                Icons.Default.ArrowUpward,
+                                highlighted = rowFocused && focusedAction == VIDEO_ACTION_UP,
+                                enabled = index > 0,
+                                onClick = { press(VIDEO_ACTION_UP) }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            YouTubeActionChip(
+                                Icons.Default.ArrowDownward,
+                                highlighted = rowFocused && focusedAction == VIDEO_ACTION_DOWN,
+                                enabled = index < videos.size - 1,
+                                onClick = { press(VIDEO_ACTION_DOWN) }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            YouTubeActionChip(
+                                Icons.Default.Delete,
+                                highlighted = rowFocused && focusedAction == VIDEO_ACTION_REMOVE,
+                                danger = armed,
+                                onClick = { press(VIDEO_ACTION_REMOVE) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private const val VIDEO_ACTION_UP = 0
+private const val VIDEO_ACTION_DOWN = 1
+private const val VIDEO_ACTION_REMOVE = 2
+
+@Composable
+private fun YouTubeModalRow(
+    title: String,
+    subtitle: String,
+    isFocused: Boolean,
+    onClick: (() -> Unit)?,
+    danger: Boolean = false,
+    imageUrl: String? = null,
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit
+) {
+    val accent = if (danger) Color(0xFFDC2626) else Pink
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .background(Color.White.copy(alpha = if (isFocused) 0.12f else 0.04f), RoundedCornerShape(10.dp))
+            .border(if (isFocused) 2.dp else 1.dp, if (isFocused) accent else Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (imageUrl != null) {
+            coil.compose.AsyncImage(
+                model = imageUrl,
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.width(96.dp).height(54.dp).clip(RoundedCornerShape(6.dp))
+            )
+            Spacer(modifier = Modifier.width(14.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = ArflixTypography.cardTitle.copy(fontSize = 16.sp), color = TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, style = ArflixTypography.caption.copy(fontSize = 13.sp), color = if (danger) accent else TextSecondary, maxLines = 1)
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        actions()
+    }
+}
+
+@Composable
+private fun YouTubeActionChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    highlighted: Boolean,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    danger: Boolean = false
+) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .background(
+                when {
+                    highlighted && danger -> Color(0xFFDC2626)
+                    highlighted -> Color.White
+                    else -> Color.White.copy(alpha = 0.08f)
+                },
+                RoundedCornerShape(8.dp)
+            )
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = when {
+                highlighted && danger -> Color.White
+                highlighted -> Color.Black
+                !enabled -> TextSecondary.copy(alpha = 0.3f)
+                else -> TextSecondary
+            },
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
