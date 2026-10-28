@@ -12,7 +12,8 @@ export function collectionFolders(rail: CatalogConfig, catalogs: CatalogConfig[]
 export function collectionHomeCatalogs(catalogs: CatalogConfig[]) {
   // Collection folders only belong inside their rail. Hiding/removing that rail
   // must not promote its folders into standalone movie rows on Home.
-  return catalogs.filter(c => c.enabled !== false && String(c.kind).toUpperCase() !== 'COLLECTION');
+  // VaderTV: "My lists only" rows from the panel (id vtv_ytl_*) stay in Library, off Home.
+  return catalogs.filter(c => c.enabled !== false && String(c.kind).toUpperCase() !== 'COLLECTION' && !String(c.id).startsWith('vtv_ytl_'));
 }
 
 export function collectionSourceSupports(source: CollectionSourceConfig, type: MediaType) {

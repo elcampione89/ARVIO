@@ -130,6 +130,13 @@ data class CatalogConfig(
     val collectionRailKey: String? = null
 ) : Serializable
 
+/**
+ * VaderTV: rows the panel sends as "My lists only" (id prefix vtv_ytl_). They stay in
+ * Library > My lists but are not shown as rows on Home.
+ */
+val CatalogConfig.isListsOnly: Boolean
+    get() = id.startsWith("vtv_ytl_")
+
 /** Key that ties collection tiles to their rail: the imported rail key, else the built-in group. */
 val CatalogConfig.collectionRailKeyOrGroup: String?
     get() = collectionRailKey ?: collectionGroup?.name

@@ -22,6 +22,7 @@ import com.arflix.tv.data.model.CatalogKind
 import com.arflix.tv.data.model.CatalogSourceType
 import com.arflix.tv.data.model.CollectionGroupKind
 import com.arflix.tv.data.model.collectionRailKeyOrGroup
+import com.arflix.tv.data.model.isListsOnly
 import com.arflix.tv.data.model.MediaItem
 import com.arflix.tv.data.model.MediaType
 import com.arflix.tv.data.model.SportsAddonCapabilities
@@ -1774,7 +1775,7 @@ class HomeViewModel @Inject constructor(
         listRowsReloadJobs.remove(provider)?.cancel()
         listRowsReloadJobs[provider] = viewModelScope.launch(networkDispatcher) {
             val catalogs = runCatching { catalogRepository.getCatalogs() }.getOrDefault(emptyList())
-                .filter { it.sourceType == sourceType }
+                .filter { it.sourceType == sourceType && !it.isListsOnly }
             for (catalog in catalogs) {
                 if (!isCurrent()) return@launch
                 val page = runCatching {
@@ -3004,7 +3005,8 @@ class HomeViewModel @Inject constructor(
                     }
                 }
                 val iptvFavoritesOnHome = isIptvFavoritesOnHomeEnabled()
-                val savedCatalogs = applyIptvFavoritesPlacement(rawSavedCatalogs, iptvFavoritesOnHome)
+                // "My lists only" rows from the panel live in Library > My lists, not on Home.
+                val savedCatalogs = applyIptvFavoritesPlacement(rawSavedCatalogs.filterNot { it.isListsOnly }, iptvFavoritesOnHome)
                 currentSavedCatalogs = savedCatalogs
                 savedCatalogById.clear()
                 savedCatalogs.forEach { savedCatalogById[it.id] = it }

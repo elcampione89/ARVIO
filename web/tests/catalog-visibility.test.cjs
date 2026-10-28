@@ -116,3 +116,11 @@ test('web addon visibility changes sync to Android with a per-profile timestamp 
   const pulled = (await f.cloud.pullCloudPayload(auth, 'p1')).settings;
   assert.deepEqual(Array.from(pulled.hiddenAddonCatalogIds), ['local-hidden', 'remote-hidden']);
 });
+
+test('panel "My lists only" YouTube rows stay off Home', () => {
+  const rows = [
+    { id: 'vtv_yt_1', name: 'On Home', sourceType: 'youtube', enabled: true },
+    { id: 'vtv_ytl_2', name: 'Lists only', sourceType: 'youtube', enabled: true }
+  ];
+  assert.deepEqual(collectionHomeCatalogs(rows).map(c => c.id), ['vtv_yt_1']);
+});
