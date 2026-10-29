@@ -88,7 +88,9 @@ object SportsAddonCapabilities {
 
         if (!hasStream || !hasCatalog) return false
 
-        if (catalogs.any(::isSportsCatalog)) return true
+        // A sports-named catalog of ordinary films or shows (e.g. a Plex "Sport" library served by
+        // Plexio) is on-demand video, not live sport: only non-VOD sports catalogs count.
+        if (catalogs.any { isSportsCatalog(it) && !isExplicitVodType(it.type) }) return true
 
         val manifestText = normalizedText(
             manifest.id,

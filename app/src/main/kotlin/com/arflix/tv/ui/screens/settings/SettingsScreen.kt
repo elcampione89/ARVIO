@@ -334,8 +334,9 @@ private fun tvGeneralRowsForSection(section: String): List<Int> {
         "playback" -> listOf(10, 11, 12, 43, 44, 13, 14, 34, 37, 16, 15, 40, 27)
         "appearance" -> listOf(17, 49, 50, 18, 20, 21, 24, 23, 22, 41, 46, 36, 47)
         "profiles" -> listOf(19)
-        // 49/50: VPN switch and location, only when the panel offers the VPN (Panel > VPN).
-        "network" -> (if (com.arflix.tv.vpn.VpnController.state.value.offered) listOf(49, 50) else emptyList()) +
+        // 60/61: VPN switch and location, only when the panel offers the VPN (Panel > VPN).
+        // (49/50 belong to Interface: Netflix-style Home and Watchlist on Home.)
+        "network" -> (if (com.arflix.tv.vpn.VpnController.state.value.offered) listOf(60, 61) else emptyList()) +
             listOf(25, 26, 35)
         else -> emptyList()
     }
@@ -1466,8 +1467,8 @@ fun SettingsScreen(
                                                 25 -> openDnsProviderPicker()
                                                 26 -> viewModel.setShowLoadingStats(!uiState.showLoadingStats)
                                                 35 -> showCustomUserAgentDialog = true
-                                                49 -> com.arflix.tv.vpn.VpnController.toggle(context)
-                                                50 -> com.arflix.tv.vpn.VpnController.cycleLocation()
+                                                60 -> com.arflix.tv.vpn.VpnController.toggle(context)
+                                                61 -> com.arflix.tv.vpn.VpnController.cycleLocation()
                                                 27 -> viewModel.cycleVolumeBoost()
                                                 28 -> viewModel.setSubtitleAiEnabled(!uiState.subtitleAiEnabled)
                                                 29 -> showAiModelDialog = true
@@ -7392,8 +7393,8 @@ private fun TvGeneralSettingsRows(
         tvGeneralRowsForSection(section).forEachIndexed { localIndex, rowId ->
             if (localIndex > 0) Spacer(modifier = Modifier.height(10.dp))
             when (rowId) {
-                49 -> SettingsRow(Icons.Default.VpnKey, "VPN", vpnSubtitle(vpn), vpnValue(vpn), focusedIndex == localIndex, { com.arflix.tv.vpn.VpnController.toggle(vpnContext) }, Modifier.settingsFocusSlot(localIndex))
-                50 -> SettingsRow(Icons.Default.Language, "VPN location", "Fastest picks the quickest server each time you connect.", vpn.selectedLabel, focusedIndex == localIndex, { com.arflix.tv.vpn.VpnController.cycleLocation() }, Modifier.settingsFocusSlot(localIndex))
+                60 -> SettingsRow(Icons.Default.VpnKey, "VPN", vpnSubtitle(vpn), vpnValue(vpn), focusedIndex == localIndex, { com.arflix.tv.vpn.VpnController.toggle(vpnContext) }, Modifier.settingsFocusSlot(localIndex))
+                61 -> SettingsRow(Icons.Default.Language, "VPN location", "Fastest picks the quickest server each time you connect.", vpn.selectedLabel, focusedIndex == localIndex, { com.arflix.tv.vpn.VpnController.cycleLocation() }, Modifier.settingsFocusSlot(localIndex))
                 0 -> SettingsRow(
                     icon = Icons.Default.Language,
                     title = stringResource(R.string.app_language),

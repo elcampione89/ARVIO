@@ -71,6 +71,28 @@ class SportsAddonCapabilitiesTest {
     }
 
     @Test
+    fun `plex library named sport served as series is not live sports`() {
+        val manifest = AddonManifest(
+            id = "com.stremio.plexio",
+            name = "Plexio (VPlex)",
+            version = "0.1.22",
+            description = "Plex libraries",
+            types = listOf("movie", "series"),
+            resources = listOf(
+                AddonResource(name = "stream"),
+                AddonResource(name = "catalog"),
+                AddonResource(name = "meta", types = listOf("movie", "series"), idPrefixes = listOf("plexio"))
+            ),
+            catalogs = listOf(
+                AddonCatalog(type = "movie", id = "4", name = "Movies | VPlex"),
+                AddonCatalog(type = "series", id = "11", name = "Sport | VPlex")
+            )
+        )
+
+        assertFalse(SportsAddonCapabilities.isSportsLiveTvManifest(manifest))
+    }
+
+    @Test
     fun `highfly style sport manifest is detected`() {
         val manifest = AddonManifest(
             id = "community.sports.fly",
