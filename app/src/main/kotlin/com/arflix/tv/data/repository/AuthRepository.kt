@@ -161,6 +161,11 @@ class AuthRepository @Inject constructor(
                 if (vpnRevision.isNotBlank() && vpnRevision != com.arflix.tv.vpn.VpnController.revision) {
                     syncPanelVpn(accessToken)
                 }
+                val avatarsRevision = meJson?.optString("avatars_revision").orEmpty()
+                com.arflix.tv.util.PanelAvatars.restore(context)
+                if (avatarsRevision.isNotBlank() && avatarsRevision != com.arflix.tv.util.PanelAvatars.revision) {
+                    syncPanelAvatars(accessToken)
+                }
                 val collectionsRevision = meJson?.optString("collections_revision").orEmpty()
                 if (collectionsRevision.isNotBlank()) {
                     syncPanelCollections(accessToken, collectionsRevision)
@@ -237,6 +242,18 @@ class AuthRepository @Inject constructor(
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             AppLogger.breadcrumb("Auth", "panel_vpn_failed ${e.javaClass.simpleName}", severity = "warning")
+        }
+    }
+
+    /** Loads the avatars uploaded in the panel for the profile avatar picker. */
+    private suspend fun syncPanelAvatars(accessToken: String) {
+        try {
+            val body = cockpitArvioApi.getAvatars("Bearer $accessToken").use { it.string() }
+            com.arflix.tv.util.PanelAvatars.apply(context, body)
+            AppLogger.breadcrumb("Auth", "panel_avatars_applied")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            AppLogger.breadcrumb("Auth", "panel_avatars_failed ${e.javaClass.simpleName}", severity = "warning")
         }
     }
 
@@ -378,6 +395,7 @@ class AuthRepository @Inject constructor(
             panelScope.launch {
                 syncPanelConfig(tokens.accessToken)
                 syncPanelVpn(tokens.accessToken)
+                syncPanelAvatars(tokens.accessToken)
                 syncPanelAddons(tokens.accessToken)
                 syncPanelCollections(tokens.accessToken)
             }
@@ -414,6 +432,7 @@ class AuthRepository @Inject constructor(
         }
         // The VPN belongs to the signed-in line.
         runCatching { com.arflix.tv.vpn.VpnController.clear() }
+        runCatching { com.arflix.tv.util.PanelAvatars.clear(context) }
 
         runCatching { traktRepositoryProvider.get().logout() }
 

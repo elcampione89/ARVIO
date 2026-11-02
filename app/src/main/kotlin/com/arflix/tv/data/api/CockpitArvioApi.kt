@@ -60,6 +60,10 @@ interface CockpitArvioApi {
         @retrofit2.http.Query("server") serverId: Int
     ): ResponseBody
 
+    /** Avatars uploaded in the panel, offered as an extra set in the profile avatar picker. */
+    @GET("avatars.php")
+    suspend fun getAvatars(@Header("Authorization") authorization: String): ResponseBody
+
     /** Frees this device's slot on the panel. */
     @POST("logout.php")
     suspend fun logout(@Header("Authorization") authorization: String): ResponseBody

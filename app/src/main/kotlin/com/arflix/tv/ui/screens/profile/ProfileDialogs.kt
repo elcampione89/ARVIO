@@ -39,6 +39,8 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -513,6 +515,11 @@ private fun ProfileDialogContent(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
+                    PanelAvatarRow(
+                        selectedAvatarImageUri = selectedAvatarImageUri,
+                        onPicked = { hideKeyboard(); onAvatarImageSelected(it) }
+                    )
+
                     AvatarRegistry.categories.forEachIndexed { rowIdx, (label, ids) ->
                         Text(
                             text = avatarCategoryLabel(label),
@@ -777,7 +784,11 @@ private fun ProfileDialogContent(
                     Column(
                         modifier = Modifier.width(460.dp)
                     ) {
-                        // Avatar picker - 4 horizontal scrolling rows by category
+                        // Avatars uploaded in the panel, then the 4 built-in rows by category
+                        PanelAvatarRow(
+                            selectedAvatarImageUri = selectedAvatarImageUri,
+                            onPicked = onAvatarImageSelected
+                        )
                         AvatarRegistry.categories.forEachIndexed { rowIdx, (label, ids) ->
                             Text(
                                 text = avatarCategoryLabel(label),
@@ -998,6 +1009,142 @@ private fun AvatarImageButtons(
 // ============================================================
 // Avatar grid item — individual avatar cell
 // ============================================================
+
+/** The avatars uploaded in the panel (panel > Avatars), when there are any. */
+@Composable
+private fun PanelAvatarRow(
+    selectedAvatarImageUri: String?,
+    onPicked: (String) -> Unit
+) {
+    val panelSet by com.arflix.tv.util.PanelAvatars.state.collectAsState()
+    if (panelSet.items.isEmpty()) return
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var loadingId by remember { mutableStateOf<String?>(null) }
+
+    Text(
+        text = panelSet.label.ifBlank { "VaderTV" },
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        color = Color.White.copy(alpha = 0.5f),
+        modifier = Modifier.padding(start = 8.dp, bottom = 6.dp)
+    )
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+    ) {
+        items(panelSet.items.size) { i ->
+            val item = panelSet.items[i]
+            PanelAvatarGridItem(
+                imageUrl = item.url,
+                isSelected = selectedAvatarImageUri?.endsWith("/${item.id}.jpg") == true,
+                isLoading = loadingId == item.id,
+                onClick = {
+                    if (loadingId != null) return@PanelAvatarGridItem
+                    loadingId = item.id
+                    scope.launch {
+                        try {
+                            onPicked(com.arflix.tv.util.PanelAvatars.download(context, item))
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            android.widget.Toast.makeText(context, R.string.avatar_decode_failed, android.widget.Toast.LENGTH_SHORT).show()
+                        } finally {
+                            loadingId = null
+                        }
+                    }
+                }
+            )
+        }
+    }
+    Spacer(modifier = Modifier.height(10.dp))
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun PanelAvatarGridItem(
+    imageUrl: String,
+    isSelected: Boolean,
+    isLoading: Boolean,
+    onClick: () -> Unit
+) {
+    val isTouchDevice = LocalDeviceType.current.isTouchDevice()
+    var isFocused by remember { mutableIntStateOf(0) }
+    val scale by animateFloatAsState(
+        targetValue = if (isFocused > 0) 1.12f else 1f,
+        animationSpec = tween(150),
+        label = "panelAvatarScale"
+    )
+    val content: @Composable () -> Unit = {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color(0xFF1B1530)),
+            contentAlignment = Alignment.Center
+        ) {
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            if (isSelected || isLoading) {
+                Box(
+                    modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isLoading) {
+                        Text(text = "…", fontSize = 18.sp, color = Color.White)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = stringResource(R.string.selected),
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+    if (isTouchDevice) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .border(
+                    width = if (isSelected || isFocused > 0) 2.dp else 1.dp,
+                    color = if (isSelected || isFocused > 0) Color.White else Color.White.copy(alpha = 0.08f),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                .clickable { onClick() }
+                .onFocusChanged { isFocused = if (it.isFocused) 1 else 0 }
+        ) { content() }
+    } else {
+        Surface(
+            onClick = onClick,
+            modifier = Modifier
+                .size(54.dp)
+                .scale(scale)
+                .onFocusChanged { isFocused = if (it.isFocused) 1 else 0 },
+            shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(10.dp)),
+            colors = ClickableSurfaceDefaults.colors(
+                containerColor = Color.Transparent,
+                focusedContainerColor = Color.Transparent
+            ),
+            border = ClickableSurfaceDefaults.border(
+                border = androidx.tv.material3.Border(
+                    border = androidx.compose.foundation.BorderStroke(
+                        if (isSelected) 2.dp else 1.dp,
+                        if (isSelected) Color.White else Color.White.copy(alpha = 0.08f)
+                    ),
+                    shape = RoundedCornerShape(10.dp)
+                ),
+                focusedBorder = androidx.tv.material3.Border(
+                    border = androidx.compose.foundation.BorderStroke(2.dp, Color.White),
+                    shape = RoundedCornerShape(10.dp)
+                )
+            )
+        ) { content() }
+    }
+}
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
