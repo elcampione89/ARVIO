@@ -16,9 +16,15 @@ test('addon outboxes are account scoped and refuse a false saved state when stor
 });
 test('browser autoplay rejects external and uncached sources and prefers direct playback',()=>{
  const api=load('lib/browserAutoplay.ts',{'./debrid':{isUncachedDebridStream:s=>s.uncached},'./streamCompatibility':{playbackPlan:s=>({route:s.external?'external':'here',method:s.method??'direct'})},'./sourceRank':{sourcePickerScore:s=>s.score??0}});
- const sources=[{url:'transcode',method:'transcode',score:100},{url:'external',external:true},{url:'torrent',uncached:true},{url:'direct'},{url:'remux',method:'remux'},{url:'direct'}];
+ const sources=[{url:'transcode',method:'transcode',score:100,quality:'1080p'},{url:'external',external:true,quality:'1080p'},{url:'torrent',uncached:true,quality:'1080p'},{url:'direct',quality:'1080p'},{url:'remux',method:'remux',quality:'720p'},{url:'direct',quality:'1080p'}];
  assert.equal(Array.from(api.browserAutoplayCandidates(sources),s=>s.url).join(','),'direct,remux,transcode');
  assert.equal(Array.from(api.browserAutoplayCandidates(sources,new Set(['direct'])),s=>s.url).join(','),'remux,transcode');
+});
+test('browser autoplay only picks HD: 1080p before 720p, never 4K, SD or unlabelled',()=>{
+ const api=load('lib/browserAutoplay.ts',{'./debrid':{isUncachedDebridStream:()=>false},'./streamCompatibility':{playbackPlan:()=>({route:'here',method:'direct'})},'./sourceRank':{sourcePickerScore:s=>s.score??0}});
+ const sources=[{url:'uhd',quality:'2160p',score:900},{url:'k4',description:'Movie 4K HDR',score:800},{url:'sd',quality:'480p'},{url:'none',score:500},{url:'hd',quality:'720p',score:300},{url:'fhd',quality:'1080p',score:100},{url:'fhd2',description:'Film.1080p.WEB-DL',score:200}];
+ assert.equal(Array.from(api.browserAutoplayCandidates(sources),s=>s.url).join(','),'fhd2,fhd,hd');
+ assert.equal(api.browserAutoplayCandidates([{url:'uhd',quality:'2160p'}]).length,0);
 });
 test('navigation round-trips shareable details and search while preserving unrelated URL parameters',()=>{
  const api=load('lib/webNavigation.ts');const route={section:'search',query:'Space & time',title:{id:42,mediaType:'movie'}};
