@@ -1,3 +1,5 @@
+import { languageCode, sameLanguage } from "./languages";
+
 export type RemuxAudioTrack = {
   index: number; codec: string; label: string; language?: string; channels?: number;
   browserPlayable: boolean; passthrough: boolean;
@@ -27,7 +29,9 @@ export function preferredAudioIndex(tracks: RemuxAudioTrack[], language = "") {
   const pref = language.trim().toLowerCase();
   const codes = languages[pref] ?? Object.values(languages).find((v) => v.includes(pref)) ?? [pref];
   const playable = tracks.filter((track) => track.browserPlayable);
-  const matching = playable.filter((track) => codes.includes((track.language ?? "").toLowerCase()));
+  // The preference is a code or an Android display name ("Turkish", "Portuguese (Brazil)").
+  const wanted = languageCode(language);
+  const matching = playable.filter((track) => codes.includes((track.language ?? "").toLowerCase()) || (wanted !== "" && sameLanguage(track.language, wanted)));
   // Keep provider/default order; a compatible stereo track beats unnecessary conversion.
   const pool = matching.length ? matching : playable;
   return (pool.find((track) => track.passthrough) ?? pool[0])?.index ?? -1;

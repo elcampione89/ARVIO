@@ -49,3 +49,4 @@ export async function jsonRequest(url: string, init: RequestInit = {}) {
   }
   throw Error('Unmocked request blocked');
 }
+export function proxiedUrl(url: string) { return '/api/proxy?url=' + encodeURIComponent(url); }

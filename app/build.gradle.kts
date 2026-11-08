@@ -93,11 +93,12 @@ android {
         // Fire TV devices can be as low as Android 7.1 (API 25) or lower depending on model/OS.
         minSdk = 23
         targetSdk = 36
-        versionCode = 334
-        versionName = "2.3.4"
+        versionCode = 335
+        versionName = "2.3.5"
         buildConfigField("String", "GITHUB_OWNER", "\"ProdigyV21\"")
         buildConfigField("String", "GITHUB_REPO", "\"ARVIO\"")
         buildConfigField("Boolean", "FEATURE_PLUGINS_ENABLED", "false")
+        buildConfigField("Boolean", "PARTNER_MANAGEMENT_ENABLED", (providers.gradleProperty("partnerManagement").orNull == "true").toString())
         // Use the same resolution for generated values and release validation.
         buildConfigField("String", "TELEGRAM_API_ID", "\"${escapeBuildConfigString(localSecretValue("TELEGRAM_API_ID"))}\"")
         buildConfigField("String", "TELEGRAM_API_HASH", "\"${escapeBuildConfigString(localSecretValue("TELEGRAM_API_HASH"))}\"")
@@ -413,10 +414,9 @@ ksp {
     implementation("androidx.media3:media3-session:$media3Version")
     implementation("androidx.media3:media3-common:$media3Version")
     // FFmpeg extension for software decoding of DTS/TrueHD/Atmos/HEVC/DV.
-    // Keep this only in the sideload build. The Play Store build must comply
-    // with 16 KB memory page support, and the current prebuilt native library
-    // (libffmpegJNI.so) is the likely source of the Play Console warning.
-    add("sideloadImplementation", "org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
+    // This version's ARM64 ELF load segments are 16 KB aligned. Both distributions need
+    // software audio decoding on TVs without a compatible hardware decoder/output route.
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
 
     // Networking - Retrofit + OkHttp
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
@@ -441,6 +441,7 @@ ksp {
     implementation("io.coil-kt:coil-compose:2.5.0")
     implementation("io.coil-kt:coil-gif:2.5.0")
     implementation("io.coil-kt:coil-svg:2.5.0")
+    implementation("androidx.palette:palette-ktx:1.0.0")
     implementation("com.google.zxing:core:3.5.3")
 
     // Supabase (optional - for cloud sync)
@@ -531,6 +532,7 @@ ksp {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.2.0")
     androidTestImplementation("io.mockk:mockk-android:1.13.8")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 }
 

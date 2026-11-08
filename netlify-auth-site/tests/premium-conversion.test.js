@@ -114,7 +114,9 @@ test("public Premium links preserve membership and free self-hosting destination
   assert.match(redirects, /from = "\/go\/membership\/nav"/);
   const { premiumDestination } = require('../../netlify-arvio-tv-site/premium-redirect');
   assert.match(redirects, /to = "\/premium-redirect.html"\s+status = 200/);
-  assert.match(premiumDestination('/go/membership/spotlight'), /ko-fi\.com\/arvio\/tiers.*utm_content=spotlight/);
+  // Checkout happens inside ARVIO Web (explore mode, plans at Play), so old
+  // membership links open the web app with their placement kept.
+  assert.match(premiumDestination('/go/membership/spotlight'), /^https:\/\/web\.arvio\.tv\/.*utm_content=spotlight/);
   assert.equal(new URL(premiumDestination('/go/premium/hero')).searchParams.has('intent'), false);
 
   const login = fs.readFileSync(path.join(root, "web", "components", "login", "LoginScreen.tsx"), "utf8");
@@ -130,7 +132,7 @@ test("website handoff measurement preserves every CTA and cannot redirect off th
     assert.equal(target.searchParams.has('intent'), false);
   }
   for (const placement of ['nav', 'spotlight', 'details', 'footer']) {
-    assert.equal(new URL(premiumDestination('/go/membership/' + placement)).origin, 'https://ko-fi.com');
+    assert.equal(new URL(premiumDestination('/go/membership/' + placement)).origin, 'https://web.arvio.tv');
   }
   for (const path of ['/go/premium/https://evil.invalid', '/go/premium//evil.invalid', '/go/membership', '/go/premium?to=https://evil.invalid']) assert.equal(premiumDestination(path), null);
   const html = fs.readFileSync(path.join(__dirname, '../../netlify-arvio-tv-site/premium-redirect.html'), 'utf8');

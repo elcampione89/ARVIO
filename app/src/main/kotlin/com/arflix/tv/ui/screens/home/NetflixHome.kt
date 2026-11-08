@@ -2,11 +2,14 @@ package com.arflix.tv.ui.screens.home
 
 import android.os.SystemClock
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
@@ -32,7 +35,13 @@ import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
+import androidx.compose.foundation.lazy.LazyListPrefetchScope
+import androidx.compose.foundation.lazy.LazyListPrefetchStrategy
+import androidx.compose.foundation.lazy.layout.LazyLayoutPrefetchState
+import androidx.compose.foundation.lazy.layout.NestedPrefetchScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -46,6 +55,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -64,6 +74,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -74,6 +86,8 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -91,6 +105,7 @@ import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
 import coil.size.Precision
+import kotlinx.coroutines.delay
 import com.arflix.tv.R
 import com.arflix.tv.data.model.Category
 import com.arflix.tv.data.model.MediaItem
@@ -101,9 +116,12 @@ import com.arflix.tv.ui.components.AppTopBarHeight
 import com.arflix.tv.ui.components.CardLayoutMode
 import com.arflix.tv.ui.components.CardClearLogo
 import com.arflix.tv.ui.components.TrailerPlayer
+import com.arflix.tv.ui.components.WatchedBadge
 import com.arflix.tv.ui.components.MediaCard
 import com.arflix.tv.ui.components.rememberCatalogueRowLayoutMode
+import com.arflix.tv.ui.components.timeRemainingBadgeLabel
 import com.arflix.tv.ui.theme.ArflixTypography
+import com.arflix.tv.util.Constants
 import com.arflix.tv.util.TmdbImageSizing
 import com.arflix.tv.util.parseRatingValue
 import com.arflix.tv.ui.components.ImdbSvgRatingBadge
@@ -117,6 +135,10 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.LayoutCoordinates
 
 private const val NETFLIX_RAIL_MORPH_MS = 220
+/** Margin past the vertical scroll before a row that left through the top collapses. */
+private const val NETFLIX_COLLAPSE_SETTLE_MS = 80
+/** Resting row titles draw at 17sp of the focused row's 20sp. */
+private const val NETFLIX_RESTING_HEADING_SCALE = 17f / 20f
 
 /** What the Netflix-style TV Home draws beyond the classic rows. Null selects the classic Home. */
 @Immutable
@@ -137,7 +159,9 @@ internal data class NetflixHomeContent(
      * decoder to a new surface would leave the video black under playing audio.
      */
     val channelPreviewPlayer: androidx.media3.exoplayer.ExoPlayer? = null,
-    val channelPreviewItem: MediaItem? = null
+    val channelPreviewItem: MediaItem? = null,
+    /** Home finished loading with no billboard candidate: collapse the slot instead of a black box. */
+    val billboardHidden: Boolean = false
 )
 
 private val NETFLIX_BILLBOARD_TOP10_IDS = setOf("top10_movies_today", "top10_shows_today")
@@ -151,7 +175,9 @@ private val NETFLIX_BILLBOARD_KIDS_IDS = setOf(
  * Billboard candidates: today's Top 10 movies and series. When those rows are hidden,
  * any other Top 10 row, then the trending rows, then the kids starter rows. Those exist
  * on a kids profile, where the age filter can empty every Top 10 and trending row and an
- * empty candidate list left a black billboard.
+ * empty candidate list left a black billboard. Last, any other row except Continue
+ * Watching, for profiles whose Home has none of those rows (only collections and addon
+ * catalogs); special items (channels, collections, sports) are filtered out per item.
  */
 internal fun netflixBillboardCandidates(
     categories: List<Category>,
@@ -171,7 +197,8 @@ internal fun netflixBillboardCandidates(
         { it.id in NETFLIX_BILLBOARD_TOP10_IDS },
         isOtherTop10,
         { it.id in NETFLIX_BILLBOARD_TRENDING_IDS },
-        { it.id in NETFLIX_BILLBOARD_KIDS_IDS }
+        { it.id in NETFLIX_BILLBOARD_KIDS_IDS },
+        { it.id != "continue_watching" }
     )
         .map { matches -> itemsOf(categories.filter(matches)) }
         .firstOrNull { it.isNotEmpty() }
@@ -223,6 +250,8 @@ internal fun handleNetflixHomeKey(
                 focusState.userHasNavigated = true
                 focusState.isHeroFocused = false
                 focusState.currentRowIndex = 0
+                // Catalog refreshes reconcile focus to the preferred row: make it this one.
+                focusState.preferredCategoryId = firstRow.id
                 focusState.currentItemIndex = focusState.restoredItemIndex(
                     firstRow,
                     focusState.rowItemIndicesByCategoryId[firstRow.id] ?: 0
@@ -300,7 +329,8 @@ internal fun NetflixTvHomeRowsLayer(
         // Focused-row card height: room for the row title above, the description
         // below and a peek of the next row.
         val bigCardHeight = (maxHeight * 0.42f).coerceIn(170.dp, 330.dp)
-        val listState = rememberLazyListState()
+        @OptIn(ExperimentalFoundationApi::class)
+        val listState = rememberLazyListState(prefetchStrategy = remember { NetflixNextRowPrefetchStrategy() })
         val targetIndex = if (focusState.isHeroFocused) 0 else focusState.currentRowIndex + 1
         val focusedRowId = if (focusState.isHeroFocused) null else categories.getOrNull(focusState.currentRowIndex)?.id
         var appliedTarget by remember { mutableIntStateOf(-1) }
@@ -375,7 +405,9 @@ internal fun NetflixTvHomeRowsLayer(
                 contentPadding = PaddingValues(bottom = screenHeight),
                 modifier = Modifier.fillMaxSize().testTag("netflix_vertical_rails")
             ) {
+                // Stays item 0 even when hidden, so row N remains list index N + 1.
                 item(key = "netflix_billboard", contentType = "netflix_billboard") {
+                    if (netflix.billboardHidden) return@item
                     NetflixBillboard(
                         item = netflix.billboardItem,
                         logoUrl = netflix.billboardLogoUrl,
@@ -446,6 +478,8 @@ internal fun NetflixTvHomeRowsLayer(
                             scrollResetRequest = focusState.scrollResetRequest,
                             cardLogoUrls = cardLogoUrls,
                             isCurrentRow = rowIsFocused,
+                            collapsesOffScreen = !focusState.isSidebarFocused && !focusState.isHeroFocused &&
+                                rowIndex < focusState.currentRowIndex,
                             focusedItemIndex = focusedItemIndex,
                             restingItemIndex = focusState.rowItemIndicesByCategoryId[category.id] ?: 0,
                             usePosterCards = rowUsePosterCards,
@@ -760,6 +794,8 @@ private fun NetflixContentRow(
     scrollResetRequest: Int,
     cardLogoUrls: Map<String, String>,
     isCurrentRow: Boolean,
+    /** The row sits above the focused one, so the vertical scroll carries it out the top. */
+    collapsesOffScreen: Boolean,
     focusedItemIndex: Int,
     restingItemIndex: Int,
     usePosterCards: Boolean,
@@ -779,7 +815,11 @@ private fun NetflixContentRow(
 ) {
     val isContinueWatching = category.id == "continue_watching"
     val isRanked = category.title.contains("Top 10", ignoreCase = true)
-    val rowState = rememberLazyListState()
+    // Prefetching this row from the vertical list also builds its first cards.
+    @OptIn(ExperimentalFoundationApi::class)
+    val rowState = rememberLazyListState(
+        prefetchStrategy = remember { LazyListPrefetchStrategy(nestedPrefetchItemCount = 3) }
+    )
     val items = remember(category.items) {
         if (category.items.isEmpty()) {
             (1..8).map { MediaItem(id = -it, title = "", mediaType = MediaType.MOVIE, isPlaceholder = true) }
@@ -793,7 +833,26 @@ private fun NetflixContentRow(
     val focusedPosterWidth = bigCardHeight * (2f / 3f)
     val restingPoster = category.isPortrait(usePosterCards)
     val restingWidth = if (restingPoster) HOME_TV_POSTER_CARD_WIDTH_DP.dp else HOME_TV_LANDSCAPE_CARD_WIDTH_DP.dp
-    val focusedItem = items.getOrNull(focusedItemIndex)?.takeIf { isCurrentRow && !it.isPlaceholder }
+
+    // A row left by moving down keeps its expanded layout while the vertical scroll
+    // carries it out the top, then collapses in one frame once it is off screen.
+    // Morphing it on screen would re-measure every one of its cards on each frame of
+    // the scroll, on top of the row growing into focus.
+    val hasComposed = remember { booleanArrayOf(false) }
+    SideEffect { hasComposed[0] = true }
+    val collapseOffScreen = remember(isCurrentRow) { !isCurrentRow && collapsesOffScreen && hasComposed[0] }
+    var holdExpanded by remember(isCurrentRow) { mutableStateOf(collapseOffScreen) }
+    LaunchedEffect(collapseOffScreen) {
+        if (collapseOffScreen) {
+            delay((NETFLIX_RAIL_MORPH_MS + NETFLIX_COLLAPSE_SETTLE_MS).toLong())
+            holdExpanded = false
+        }
+    }
+    val expanded = isCurrentRow || holdExpanded
+    val expandedIndex = if (isCurrentRow) focusedItemIndex else restingItemIndex
+    val focusedItem = items.getOrNull(expandedIndex)?.takeIf { expanded && !it.isPlaceholder }
+    val sizeSpec: AnimationSpec<Dp> =
+        if (collapseOffScreen) snap() else tween(NETFLIX_RAIL_MORPH_MS, easing = FastOutSlowInEasing)
 
     // The focused title always sits in the first slot; a resting row keeps its position.
     val anchorIndex = (if (isCurrentRow) focusedItemIndex else restingItemIndex)
@@ -823,20 +882,27 @@ private fun NetflixContentRow(
     }
     val latestOnItemClick by rememberUpdatedState(onItemClick)
 
-    val bottomPadding by animateDpAsState(if (isCurrentRow) 20.dp else 10.dp,
-        tween(NETFLIX_RAIL_MORPH_MS), label = "netflixRowSpacing")
-    val headingSize by animateFloatAsState(if (isCurrentRow) 20f else 17f,
-        tween(NETFLIX_RAIL_MORPH_MS), label = "netflixRowHeading")
+    val bottomPadding by animateDpAsState(if (expanded) 20.dp else 10.dp,
+        if (collapseOffScreen) snap<Dp>() else tween<Dp>(NETFLIX_RAIL_MORPH_MS), label = "netflixRowSpacing")
+    // Scaled at draw time: animating the font size re-measures the text on every frame.
+    val headingScale = animateFloatAsState(if (expanded) 1f else NETFLIX_RESTING_HEADING_SCALE,
+        if (collapseOffScreen) snap<Float>() else tween<Float>(NETFLIX_RAIL_MORPH_MS), label = "netflixRowHeading")
     Column(modifier = Modifier.padding(bottom = bottomPadding).testTag("netflix_row_${category.id}")) {
         Text(
             text = localizedCategoryTitle(category),
             style = ArflixTypography.sectionTitle.copy(
-                fontSize = headingSize.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 shadow = NetflixTextShadow
             ),
             color = Color.White,
-            modifier = Modifier.padding(start = startPadding, bottom = 8.dp)
+            modifier = Modifier
+                .padding(start = startPadding, bottom = 8.dp)
+                .graphicsLayer {
+                    scaleX = headingScale.value
+                    scaleY = headingScale.value
+                    transformOrigin = TransformOrigin(0f, 1f)
+                }
         )
         LazyRow(
             state = rowState,
@@ -857,68 +923,72 @@ private fun NetflixContentRow(
                     LaunchedEffect(items.size) { onLoadMore() }
                 }
                 val onClick = remember(item) { { latestOnItemClick(item) } }
-                val featured = isCurrentRow && index == focusedItemIndex && !item.isPlaceholder
-                val landscape = featured || (!isCurrentRow && !restingPoster)
-                val cardWidth = if (featured) bigCardWidth else if (isCurrentRow) focusedPosterWidth else restingWidth
-                val cardHeight = if (isCurrentRow) bigCardHeight else cardWidth / (if (landscape) (16f / 9f) else (2f / 3f))
-                val animatedWidth by animateDpAsState(cardWidth,
-                    tween(NETFLIX_RAIL_MORPH_MS, easing = FastOutSlowInEasing), label = "netflixCardWidth")
-                val animatedHeight by animateDpAsState(cardHeight,
-                    tween(NETFLIX_RAIL_MORPH_MS, easing = FastOutSlowInEasing), label = "netflixCardHeight")
+                val featured = expanded && index == expandedIndex && !item.isPlaceholder
+                val landscape = featured || (!expanded && !restingPoster)
+                val cardWidth = if (featured) bigCardWidth else if (expanded) focusedPosterWidth else restingWidth
+                val cardHeight = if (expanded) bigCardHeight else cardWidth / (if (landscape) (16f / 9f) else (2f / 3f))
+                val animatedWidth = animateDpAsState(cardWidth, sizeSpec, label = "netflixCardWidth")
+                val animatedHeight = animateDpAsState(cardHeight, sizeSpec, label = "netflixCardHeight")
                 // Decode once for the target geometry, never once per animation frame.
                 val artwork = if (item.isPlaceholder) null else rememberNetflixArtwork(
                     item, landscape, cardWidth, cardHeight, isContinueWatching)
                 Box(Modifier.testTag("netflix_morph_${item.mediaType}_${item.id}")) {
-                    when {
-                        isCurrentRow && index == focusedItemIndex && !item.isPlaceholder -> NetflixFeaturedCard(
-                            item = item,
-                            logoUrl = cardLogoUrls["${item.mediaType}_${item.id}"],
-                            width = animatedWidth,
-                            height = animatedHeight,
-                            showProgress = isContinueWatching,
-                            trailerKey = trailerKey,
-                            trailerDelayMs = trailerDelayMs,
-                            trailerVolume = trailerVolume,
-                            onChannelCardPlaced = onChannelCardPlaced,
-                            artworkPainter = artwork
-                        )
-                        isCurrentRow -> MediaCard(
-                            item = item,
-                            width = animatedWidth,
-                            isLandscape = false,
-                            showLogoImage = false,
-                            raiseOnFocus = false,
-                            showProgress = isContinueWatching,
-                            showTitle = false,
-                            focusedScale = 1f,
-                            animateFocus = false,
-                            enableSystemFocus = false,
-                            artworkPainter = artwork,
-                            artworkHeight = animatedHeight,
-                            onClick = onClick
-                        )
-                        else -> MediaCard(
-                            item = item,
-                            width = animatedWidth,
-                            isLandscape = !restingPoster,
-                            logoImageUrl = cardLogoUrls["${item.mediaType}_${item.id}"],
-                            showLogoImage = true,
-                            raiseOnFocus = false,
-                            showProgress = isContinueWatching,
-                            showTitle = false,
-                            focusedScale = 1f,
-                            animateFocus = false,
-                            enableSystemFocus = false,
-                            artworkPainter = artwork,
-                            artworkHeight = animatedHeight,
-                            onClick = onClick
-                        )
+                    // The morph size is applied at layout time: the cards get their target
+                    // size and are only re-measured each frame, not recomposed.
+                    Box(Modifier.netflixMorphSize(animatedWidth, animatedHeight), propagateMinConstraints = true) {
+                        when {
+                            featured -> NetflixFeaturedCard(
+                                item = item,
+                                logoUrl = cardLogoUrls["${item.mediaType}_${item.id}"],
+                                width = cardWidth,
+                                height = cardHeight,
+                                showProgress = isContinueWatching,
+                                trailerKey = trailerKey,
+                                trailerDelayMs = trailerDelayMs,
+                                trailerVolume = trailerVolume,
+                                // A row held expanded while it leaves must not move the channel preview.
+                                onChannelCardPlaced = if (isCurrentRow) onChannelCardPlaced else { _ -> },
+                                artworkPainter = artwork
+                            )
+                            // The artwork fills whatever height the morph gives the card.
+                            expanded -> MediaCard(
+                                item = item,
+                                width = cardWidth,
+                                isLandscape = false,
+                                showLogoImage = false,
+                                raiseOnFocus = false,
+                                showProgress = isContinueWatching,
+                                showTitle = false,
+                                focusedScale = 1f,
+                                animateFocus = false,
+                                enableSystemFocus = false,
+                                artworkPainter = artwork,
+                                fillArtworkHeight = true,
+                                onClick = onClick
+                            )
+                            else -> MediaCard(
+                                item = item,
+                                width = cardWidth,
+                                isLandscape = !restingPoster,
+                                logoImageUrl = cardLogoUrls["${item.mediaType}_${item.id}"],
+                                showLogoImage = true,
+                                raiseOnFocus = false,
+                                showProgress = isContinueWatching,
+                                showTitle = false,
+                                focusedScale = 1f,
+                                animateFocus = false,
+                                enableSystemFocus = false,
+                                artworkPainter = artwork,
+                                fillArtworkHeight = true,
+                                onClick = onClick
+                            )
+                        }
                     }
                     if (isRanked && index < 10 && !item.isPlaceholder) {
                         TopRankRibbon(
                             rank = index + 1,
-                            isFocused = isCurrentRow && index == focusedItemIndex,
-                            compact = !isCurrentRow && !restingPoster,
+                            isFocused = featured,
+                            compact = !expanded && !restingPoster,
                             modifier = Modifier
                                 .align(Alignment.TopStart)
                                 .padding(start = 8.dp)
@@ -929,8 +999,8 @@ private fun NetflixContentRow(
             if (hasViewAllCard) {
                 item(key = "${category.id}_view_all", contentType = "view_all_card") {
                     HomeViewAllCard(
-                        width = if (isCurrentRow) focusedPosterWidth else restingWidth,
-                        isLandscape = !isCurrentRow && !restingPoster,
+                        width = if (expanded) focusedPosterWidth else restingWidth,
+                        isLandscape = !expanded && !restingPoster,
                         isFocused = isCurrentRow && focusedItemIndex == items.size,
                         enableSystemFocus = false,
                         onClick = onViewAll
@@ -942,7 +1012,8 @@ private fun NetflixContentRow(
         AnimatedVisibility(
             visible = focusedItem != null,
             enter = expandVertically(tween(NETFLIX_RAIL_MORPH_MS)) + fadeIn(tween(140)),
-            exit = shrinkVertically(tween(NETFLIX_RAIL_MORPH_MS)) + fadeOut(tween(140))
+            exit = if (collapseOffScreen) ExitTransition.None
+            else shrinkVertically(tween(NETFLIX_RAIL_MORPH_MS)) + fadeOut(tween(140))
         ) {
             if (descriptionItem == null) return@AnimatedVisibility
             // The ViewModel hero carries the loaded details once it is this title.
@@ -1015,6 +1086,15 @@ private class NetflixArtworkBlendPainter(
         }
     }
 }
+
+/** Sizes the card to the running morph values. Reading them here, not in composition, keeps the card from recomposing every frame. */
+private fun Modifier.netflixMorphSize(width: State<Dp>, height: State<Dp>): Modifier =
+    layout { measurable, _ ->
+        val w = width.value.roundToPx().coerceAtLeast(0)
+        val h = height.value.roundToPx().coerceAtLeast(0)
+        val placeable = measurable.measure(Constraints.fixed(w, h))
+        layout(w, h) { placeable.place(0, 0) }
+    }
 
 /** Keep the current image while loading, then blend the ready poster/backdrop without a blank frame. */
 @Composable
@@ -1162,13 +1242,33 @@ private fun NetflixFeaturedCard(
                             .fillMaxWidth(0.6f)
                     )
                 }
-                if (showProgress && item.progress > 0) {
+                if (showProgress) {
+                    netflixContinueWatchingLabel(item)?.let { label ->
+                        Text(
+                            text = label,
+                            style = ArflixTypography.caption.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(12.dp)
+                                .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .testTag("netflix_continue_status_${item.mediaType}_${item.id}")
+                        )
+                    }
+                }
+                if (showProgress && item.showPlaybackProgress && !item.isWatched &&
+                    item.progress in 1 until Constants.WATCHED_THRESHOLD
+                ) {
                     Box(
                         Modifier
                             .align(Alignment.BottomStart)
                             .fillMaxWidth()
                             .height(4.dp)
                             .background(Color.White.copy(alpha = 0.25f))
+                            .testTag("netflix_continue_progress_${item.mediaType}_${item.id}")
                     ) {
                         Box(
                             Modifier
@@ -1178,8 +1278,34 @@ private fun NetflixFeaturedCard(
                         )
                     }
                 }
+                if (item.isWatched) {
+                    WatchedBadge(
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 12.dp, bottom = 12.dp)
+                            .testTag("netflix_watched_${item.mediaType}_${item.id}"),
+                        size = 18.dp
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun netflixContinueWatchingLabel(item: MediaItem): String? {
+    if (item.isWatched) return null
+    if (item.mediaType == MediaType.TV) {
+        val episode = item.nextEpisode ?: return null
+        return stringResource(
+            if (item.showPlaybackProgress && item.progress > 0) R.string.continue_season_episode
+            else R.string.component_next_season_episode,
+            episode.displaySeason ?: episode.seasonNumber,
+            episode.displayEpisode ?: episode.episodeNumber
+        )
+    }
+    return item.timeRemainingMinutes?.takeIf { it > 0 }?.let {
+        timeRemainingBadgeLabel(it, compact = false)
     }
 }
 
@@ -1314,4 +1440,28 @@ internal fun netflixShortOverview(overview: String): String {
         return candidate
     }
     return text
+}
+
+/**
+ * The vertical rails move only through requestScrollToItem / scrollToItem, which never call the
+ * default prefetcher (it reacts to scroll deltas). Without this, each newly revealed row is
+ * composed and measured in one frame in the middle of the morph animation. After every layout,
+ * schedule the row just below the last visible one so it is built ahead of time.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private class NetflixNextRowPrefetchStrategy : LazyListPrefetchStrategy {
+    private var scheduledIndex = -1
+    private var handle: LazyLayoutPrefetchState.PrefetchHandle? = null
+
+    override fun LazyListPrefetchScope.onScroll(delta: Float, layoutInfo: LazyListLayoutInfo) = Unit
+
+    override fun LazyListPrefetchScope.onVisibleItemsUpdated(layoutInfo: LazyListLayoutInfo) {
+        val next = (layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return) + 1
+        if (next == scheduledIndex || next >= layoutInfo.totalItemsCount) return
+        handle?.cancel()
+        scheduledIndex = next
+        handle = schedulePrefetch(next)
+    }
+
+    override fun NestedPrefetchScope.onNestedPrefetch(firstVisibleItemIndex: Int) = Unit
 }

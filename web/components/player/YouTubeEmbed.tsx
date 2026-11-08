@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { saveProgress } from "@/lib/cloud";
-import { authClient, useApp } from "@/lib/store";
+import { authClient, useAppPick } from "@/lib/store";
 import { createYouTubeCheckpointWriter, loadYouTubeApi, mountYouTubePlayer, youTubeEmbedUrl } from "@/lib/youtubePlayback";
 import type { MediaItem, StreamSource } from "@/lib/types";
 
 export function YouTubeEmbed({ videoId, item, stream }: { videoId: string; item: MediaItem | null; stream: StreamSource }) {
-  const { activeProfile, addons } = useApp();
+  const { activeProfile, addons } = useAppPick("activeProfile", "addons");
   const host = useRef<HTMLDivElement>(null);
   const scope = useRef({ profileId: activeProfile?.id ?? null, userId: authClient.session?.userId });
   scope.current = { profileId: activeProfile?.id ?? null, userId: authClient.session?.userId };

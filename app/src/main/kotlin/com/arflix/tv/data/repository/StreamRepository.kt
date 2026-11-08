@@ -45,6 +45,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.callbackFlow
@@ -349,14 +350,18 @@ class StreamRepository @Inject constructor(
     private val invalidationBus: CloudSyncInvalidationBus,
     private val telegramSourceResolver: TelegramSourceResolver,
     private val streamIntegrationRepository: StreamIntegrationRepository,
-    private val youTubeExtractor: InAppYouTubeExtractor = InAppYouTubeExtractor()
+    private val youTubeExtractor: InAppYouTubeExtractor = InAppYouTubeExtractor(),
+    private val partnerDelivery: dagger.Lazy<PartnerDeliveryRepository>? = null
 ) {
     private val gson = Gson()
     private val TAG = "StreamRepository"
     private val openSubtitlesUrl = "https://opensubtitles-v3.strem.io/subtitles"
     private data class CachedStreamResult(
         val result: StreamResult,
-        val createdAtMs: Long
+        val createdAtMs: Long,
+        // Addon messages of the search that filled this entry, so a prefetched list still says
+        // why an addon had nothing. Not persisted: a list restored from disk has none.
+        val notices: List<AddonNotice> = emptyList()
     )
     private data class PersistedStreamResultPayload(
         val streams: List<StreamSource>,
@@ -424,7 +429,9 @@ class StreamRepository @Inject constructor(
     private data class PlaybackHostHealth(
         var failures: Int = 0,
         var successes: Int = 0,
-        var lastFailureAtMs: Long = 0L
+        var lastFailureAtMs: Long = 0L,
+        val failedSources: MutableSet<String> = ConcurrentHashMap.newKeySet(),
+        var perFileResolver: Boolean = false
     )
     private val playbackHostHealth = ConcurrentHashMap<String, PlaybackHostHealth>()
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -641,7 +648,7 @@ class StreamRepository @Inject constructor(
 
     // ========== Addon Management ==========
 
-    val installedAddons: Flow<List<Addon>> =
+    val personalAddons: Flow<List<Addon>> =
         context.streamDataStore.data.map { prefs ->
             val addons = readSharedOrLegacyAddons(prefs) ?: getDefaultAddonList()
             enforceOpenSubtitles(addons).map { sanitizeAddonDisplayName(it) }
@@ -735,6 +742,12 @@ class StreamRepository @Inject constructor(
         }
         synchronized(streamResultCache) { streamResultCache.clear() }
         complete
+    }
+
+    val installedAddons: Flow<List<Addon>> = if (!com.arflix.tv.BuildConfig.PARTNER_MANAGEMENT_ENABLED || partnerDelivery == null) {
+        personalAddons
+    } else kotlinx.coroutines.flow.combine(personalAddons, partnerDelivery.get().deliveries) { personal, delivery ->
+        personal.filterNot { PartnerCatalogs.isManaged(it.id) } + delivery?.addons.orEmpty()
     }
 
     private fun readSharedOrLegacyAddons(prefs: Preferences): List<Addon>? {
@@ -1352,11 +1365,13 @@ class StreamRepository @Inject constructor(
         addedIds: Set<String> = emptySet(),
         transform: (List<Addon>) -> List<Addon>
     ) {
+        if (stampChange && com.arflix.tv.BuildConfig.PARTNER_MANAGEMENT_ENABLED &&
+            partnerDelivery?.get()?.activeDelivery()?.permissions?.addConnections == false) return
         // Save locally to the shared account-level addon list. Mirror to the
         // active profile key so older builds/cloud payloads can still recover it.
         context.streamDataStore.edit { prefs ->
             val previous = addonCloudState(prefs)
-            val addons = transform(previous.addons)
+            val addons = transform(previous.addons).filterNot { PartnerCatalogs.isManaged(it.id) }
             if (stampChange && addons == previous.addons && addedIds.isEmpty() && removedIds.isEmpty()) return@edit
             if (stampChange) {
                 val timestamp = maxOf(System.currentTimeMillis(), previous.updatedAt + 1)
@@ -2192,6 +2207,7 @@ class StreamRepository @Inject constructor(
                     "[StreamFetch][Movie] request addon=${addon.name} addonId=${addon.id} url=${sanitizeLogUrl(url)}"
                 )
                 val response = streamApi.getAddonStreams(url)
+                recordAddonNotices(response.streams, addon)
                 val streams = processStreams(response.streams ?: emptyList(), addon)
                 Log.d(
                     TAG,
@@ -2396,6 +2412,7 @@ class StreamRepository @Inject constructor(
                                 )
                                 continue
                             }
+                            recordAddonNotices(response.streams, addon)
                             val streams = processStreams(response.streams ?: emptyList(), addon)
                             Log.d(
                                 TAG,
@@ -2524,6 +2541,7 @@ class StreamRepository @Inject constructor(
                                     "[StreamFetch][Episode] airDate request addon=${addon.name} addonId=${addon.id} url=${sanitizeLogUrl(airDateUrl)}"
                                 )
                                 val airDateResponse = streamApi.getAddonStreams(airDateUrl)
+                                recordAddonNotices(airDateResponse.streams, addon)
                                 val airDateStreams = processStreams(airDateResponse.streams ?: emptyList(), addon)
                                 Log.d(
                                     TAG,
@@ -2702,7 +2720,8 @@ class StreamRepository @Inject constructor(
         }
         // Retained so cancelling the collector (back-nav, superseded prefetch)
         // also stops the scrape instead of leaking it in repositoryScope.
-        val workerJob = repositoryScope.launch {
+        val noticeSink = AddonNoticeSink()
+        val workerJob = repositoryScope.launch(noticeSink) {
             ensureAddonHealthLoaded()
             val allAddons = installedAddonsForSourceResolution()
             val streamAddons = getStreamAddons(allAddons, nativeType ?: "movie", imdbId)
@@ -2730,7 +2749,7 @@ class StreamRepository @Inject constructor(
                     val cached = streamResultCache[cacheKey]
                     if (cached != null) {
                         if (isStreamCacheFresh(cached)) {
-                            trySend(ProgressiveStreamResult(withCachedTelegramSources(cached.result.streams, telegramCached), cached.result.subtitles, 1, 1, true))
+                            trySend(ProgressiveStreamResult(withCachedTelegramSources(cached.result.streams, telegramCached), cached.result.subtitles, 1, 1, true, notices = cached.notices))
                             close()
                             return@launch
                         }
@@ -2752,7 +2771,8 @@ class StreamRepository @Inject constructor(
                             subtitles = cached.result.subtitles,
                             completedAddons = 1,
                             totalAddons = 1,
-                            isFinal = isStreamCacheFresh(cached)
+                            isFinal = isStreamCacheFresh(cached),
+                            notices = cached.notices
                         )
                     )
                     if (isStreamCacheFresh(cached)) {
@@ -2776,14 +2796,14 @@ class StreamRepository @Inject constructor(
                 if (!forceRefresh) {
                     val cached = synchronized(streamResultCache) { streamResultCache[cacheKey] }
                     if (cached != null) {
-                        trySend(ProgressiveStreamResult(withCachedTelegramSources(cached.result.streams, telegramCached), cached.result.subtitles, 1, 1, true))
+                        trySend(ProgressiveStreamResult(withCachedTelegramSources(cached.result.streams, telegramCached), cached.result.subtitles, 1, 1, true, notices = cached.notices))
                         close()
                         return@launch
                     }
                     val persisted = loadPersistedStreamResult(profileId = profileId, cacheKey = cacheKey)
                     if (persisted != null) {
                         synchronized(streamResultCache) { streamResultCache[cacheKey] = persisted }
-                        trySend(ProgressiveStreamResult(withCachedTelegramSources(persisted.result.streams, telegramCached), persisted.result.subtitles, 1, 1, true))
+                        trySend(ProgressiveStreamResult(withCachedTelegramSources(persisted.result.streams, telegramCached), persisted.result.subtitles, 1, 1, true, notices = persisted.notices))
                         close()
                         return@launch
                     }
@@ -2820,7 +2840,7 @@ class StreamRepository @Inject constructor(
                     val finalResult = StreamResult(filtered, emptyList())
                     if (!telegramIncomplete) {
                         synchronized(streamResultCache) {
-                            streamResultCache[cacheKey] = CachedStreamResult(finalResult, createdAtMs)
+                            streamResultCache[cacheKey] = CachedStreamResult(finalResult, createdAtMs, noticeSink.snapshot())
                         }
                         persistStreamResult(
                             profileId = profileId,
@@ -2841,7 +2861,8 @@ class StreamRepository @Inject constructor(
                     emptyList(),
                     completed,
                     totalAddons,
-                    completed == totalAddons
+                    completed == totalAddons,
+                    notices = noticeSink.snapshot()
                 )
                 trySend(progressiveResult)
                 if (progressiveResult.isFinal) close()
@@ -3184,6 +3205,13 @@ class StreamRepository @Inject constructor(
         }.orEmpty()
     }
 
+    /** Hands messages an addon sent instead of sources to the running search's [AddonNoticeSink]. */
+    private suspend fun recordAddonNotices(streams: List<StremioStream>?, addon: Addon) {
+        if (streams.isNullOrEmpty()) return
+        val sink = currentCoroutineContext()[AddonNoticeSink] ?: return
+        aioStreamsNotices(streams, addon.id, addon.name).forEach(sink::add)
+    }
+
     /**
      * Process raw streams into StreamSource objects -  processStreams
      */
@@ -3402,7 +3430,8 @@ class StreamRepository @Inject constructor(
         val tmdbId = tmdbId?.takeIf { it > 0 }
         // Retained so cancelling the collector (back-nav, superseded prefetch)
         // also stops the scrape instead of leaking it in repositoryScope.
-        val workerJob = repositoryScope.launch {
+        val noticeSink = AddonNoticeSink()
+        val workerJob = repositoryScope.launch(noticeSink) {
             ensureAddonHealthLoaded()
             val allAddons = installedAddonsForSourceResolution()
             val isAnime = animeMapper.isAnimeContent(tmdbId, genreIds, originalLanguage)
@@ -3441,7 +3470,7 @@ class StreamRepository @Inject constructor(
                     val cached = streamResultCache[cacheKey]
                     if (cached != null) {
                         if (isStreamCacheFresh(cached)) {
-                            trySend(ProgressiveStreamResult(withCachedTelegramSources(cached.result.streams, telegramCached), cached.result.subtitles, 1, 1, true))
+                            trySend(ProgressiveStreamResult(withCachedTelegramSources(cached.result.streams, telegramCached), cached.result.subtitles, 1, 1, true, notices = cached.notices))
                             close()
                             return@launch
                         }
@@ -3455,7 +3484,8 @@ class StreamRepository @Inject constructor(
                             subtitles = cached.result.subtitles,
                             completedAddons = 0,
                             totalAddons = 1,
-                            isFinal = false
+                            isFinal = false,
+                            notices = cached.notices
                         )
                     )
                 }
@@ -3475,7 +3505,7 @@ class StreamRepository @Inject constructor(
                 if (!forceRefresh) {
                     val cached = synchronized(streamResultCache) { streamResultCache[cacheKey] }
                     if (cached != null) {
-                        trySend(ProgressiveStreamResult(withCachedTelegramSources(cached.result.streams, telegramCached), cached.result.subtitles, 1, 1, true))
+                        trySend(ProgressiveStreamResult(withCachedTelegramSources(cached.result.streams, telegramCached), cached.result.subtitles, 1, 1, true, notices = cached.notices))
                         close()
                         return@launch
                     }
@@ -3512,7 +3542,7 @@ class StreamRepository @Inject constructor(
                     val finalResult = StreamResult(filtered, emptyList())
                     if (!telegramIncomplete) {
                         synchronized(streamResultCache) {
-                            streamResultCache[cacheKey] = CachedStreamResult(finalResult, createdAtMs)
+                            streamResultCache[cacheKey] = CachedStreamResult(finalResult, createdAtMs, noticeSink.snapshot())
                         }
                     }
                     if (filtered.isEmpty()) {
@@ -3528,7 +3558,8 @@ class StreamRepository @Inject constructor(
                     emptyList(),
                     completed,
                     totalAddons,
-                    completed == totalAddons
+                    completed == totalAddons,
+                    notices = noticeSink.snapshot()
                 )
                 trySend(progressiveResult)
                 if (progressiveResult.isFinal) close()
@@ -4086,7 +4117,12 @@ class StreamRepository @Inject constructor(
             playbackHostHealth.remove(host)
             return false
         }
-        return health.failures >= 2 && health.failures > health.successes
+        return isPlaybackHostBad(
+            failedSources = health.failedSources.size,
+            failures = health.failures,
+            successes = health.successes,
+            perFileResolver = health.perFileResolver
+        )
     }
 
     fun getPlaybackHostHealthPenalty(stream: StreamSource): Int {
@@ -4099,7 +4135,13 @@ class StreamRepository @Inject constructor(
         val health = playbackHostHealth.getOrPut(host) { PlaybackHostHealth() }
         health.failures += 1
         health.lastFailureAtMs = System.currentTimeMillis()
-        Log.w(TAG, "Playback host failure host=$host failures=${health.failures} reason=$reason")
+        health.failedSources.add(playbackSourceKey(stream?.url))
+        if (isPerFileResolverUrl(stream?.url)) health.perFileResolver = true
+        Log.w(
+            TAG,
+            "Playback host failure host=$host failures=${health.failures} " +
+                "sources=${health.failedSources.size} resolver=${health.perFileResolver} reason=$reason"
+        )
     }
 
     fun notePlaybackHostSuccess(stream: StreamSource?) {
@@ -4112,19 +4154,7 @@ class StreamRepository @Inject constructor(
         }
     }
 
-    private fun resolvedStreamCacheKey(stream: StreamSource): String {
-        val infoHash = stream.infoHash?.trim()?.lowercase(Locale.US).orEmpty()
-        if (infoHash.isNotBlank()) {
-            return "ih:${stream.addonId}|$infoHash:${stream.fileIdx ?: -1}"
-        }
-        val url = stream.url?.trim().orEmpty()
-        val urlKey = if (url.isNotBlank()) {
-            url.substringBefore('|').substringBefore('#')
-        } else {
-            stream.source
-        }
-        return "${stream.addonId}|${stream.source}|$urlKey"
-    }
+    private fun resolvedStreamCacheKey(stream: StreamSource): String = resolvedPlaybackRequestCacheKey(stream)
 
     private fun isLikelyEphemeralPlaybackUrl(url: String, stream: StreamSource): Boolean {
         val lower = url.lowercase(Locale.US)
@@ -4454,6 +4484,11 @@ class StreamRepository @Inject constructor(
     /**
      * Resolve a single stream for playback - with timeout to prevent hanging forever
      */
+    /** Drops the cached playback resolution of [stream] (its link failed). */
+    fun forgetResolvedStream(stream: StreamSource) {
+        resolvedStreamCache.remove(resolvedStreamCacheKey(stream))
+    }
+
     suspend fun resolveStreamForPlayback(stream: StreamSource): StreamSource? = withContext(Dispatchers.IO) {
         cachedResolvedStream(stream)?.let { return@withContext it }
         if (YouTubeCollection.isStreamMarker(stream.url)) {
@@ -5282,7 +5317,9 @@ data class ProgressiveStreamResult(
     val subtitles: List<Subtitle> = emptyList(),
     val completedAddons: Int,
     val totalAddons: Int,
-    val isFinal: Boolean
+    val isFinal: Boolean,
+    // Messages addons sent instead of sources (AIOStreams errors) during the search behind this list.
+    val notices: List<AddonNotice> = emptyList()
 )
 
 data class AddonRefreshReport(

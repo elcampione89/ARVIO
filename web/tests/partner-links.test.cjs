@@ -5,6 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 const { load } = require('./load.cjs');
+const { sourceOf, storeSource } = require('./sources.cjs');
 const links = load('lib/partnerLinks.ts');
 const target = search => {
   const parsed = links.parsePartnerLink(search);
@@ -220,7 +221,7 @@ test('network/provider diagnostics cannot expose credentials in the visible erro
 
 test('production episode boundary helper advances specials without treating season zero as missing', () => {
   const filename = path.resolve(__dirname, '../lib/store.tsx');
-  const source = ts.createSourceFile(filename, fs.readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const source = ts.createSourceFile(filename, storeSource(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let declaration;
   const visit = node => {
     if (ts.isFunctionDeclaration(node) && node.name?.text === 'nextLocalEpisode') declaration = node;
@@ -228,7 +229,7 @@ test('production episode boundary helper advances specials without treating seas
   };
   visit(source);
   assert.ok(declaration);
-  const code = ts.transpileModule(`module.exports = (${declaration.getText(source)});`, {
+  const code = ts.transpileModule(`module.exports = (${declaration.getText(source).replace(/^export /, '')});`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }
   }).outputText;
   const module = { exports: {} };
@@ -304,7 +305,7 @@ function handlerFixture(options = {}) {
     '@/lib/i18n': { useTranslation: () => value => value },
     '@/lib/partnerLinks': links,
     '@/lib/partnerMedia': { resolvePartnerMedia: async (...args) => { state.requests++; return options.resolve ? options.resolve(...args) : { id: 550, mediaType: 'movie', title: 'Film' }; } },
-    '@/lib/store': { useApp: () => app, getPriorityConfig: () => ({}) },
+    '@/lib/store': { useApp: () => app, useAppPick: () => app, useAppSelector: (select) => select(app), getPriorityConfig: () => ({}) },
     './PartnerLinkHandler.module.css': { default: {} }
   };
   const filename = path.resolve(__dirname, '../components/shell/PartnerLinkHandler.tsx');

@@ -13,3 +13,37 @@
 .preview-button:hover{background:#ffffff09}.support-action{display:grid;gap:10px;max-width:100%;flex:0 1 310px}
 @media(max-width:800px){.support-action{flex:auto}}
 @media(max-width:600px){.membership-actions{justify-items:stretch}.membership-button,.preview-button{width:100%;font-size:15px;padding:14px 16px}.membership-note{font-size:12px}.hosting-badge{margin-inline-start:0}.support-action{width:100%}}
+
+/* Hosted ARVIO Web is the product: headline, tour video, two plans and the refund promise. */
+h1{font-size:clamp(40px,4.3vw,62px);letter-spacing:-2px;line-height:1.05}
+h1 .headline{display:block;color:#f7f7f7}h1 .headline-accent{display:block;margin-top:8px;color:#b8f5d9}
+.hero{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr)}
+.hero-benefits{list-style:none;padding:0;margin:0 0 28px;display:grid;gap:10px;color:#d7dce5;font-size:16px;line-height:1.5}
+.hero-benefits li{position:relative;padding-inline-start:28px}.hero-benefits li:before{content:'✓';position:absolute;inset-inline-start:0;color:#b8f5d9}
+.membership-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:12px;max-width:none}
+.membership-actions .preview-button{margin-top:0}
+.hero-video{margin:0}
+.hero-video .promo-video{display:block;width:100%;height:auto;aspect-ratio:16/9;background:#000;border:1px solid #34373e;border-radius:16px;box-shadow:0 24px 80px #000}
+.hero-video .promo-video:focus-visible{outline:3px solid #a4dfff;outline-offset:6px}
+.hero-video figcaption{padding:12px 2px 0;font-size:12px;font-weight:400;letter-spacing:.5px;color:#8f98a5}
+.plans-section{padding:36px 0 64px;text-align:center;scroll-margin-top:24px}
+.plans-section h2{margin:0 0 36px;font-size:clamp(30px,3.2vw,44px);letter-spacing:-1px;line-height:1.15}
+.plans{display:grid;grid-template-columns:repeat(2,minmax(0,330px));justify-content:center;gap:20px}
+.plan{position:relative;display:flex;flex-direction:column;padding:32px 26px 24px;text-align:start;border:1px solid #2a2f35;border-radius:20px;background:#0d0f12}
+.plan h3{margin:0;font-size:16px;font-weight:600;color:#d7dce5}
+.plan-price{margin:12px 0 6px}.plan-price strong{font-size:44px;letter-spacing:-1.5px}.plan-price span{font-size:15px;color:#aeb4be}
+.plan-note{flex-grow:1;margin:0 0 22px;font-size:14px;line-height:1.55;color:#aeb4be}
+.plan-best{border-color:#b8f5d980;background:linear-gradient(160deg,#14271e,#0b100e 70%);box-shadow:0 0 0 1px #b8f5d933,0 20px 60px #0008}
+.plan-badge{position:absolute;top:-13px;inset-inline-start:22px;max-width:calc(100% - 44px);margin:0;padding:5px 12px;border-radius:20px;background:#b8f5d9;color:#0a2116;font-size:12px;font-weight:700;line-height:1.4}
+.plan-button{width:100%;text-align:center;line-height:1.4}.plan .membership-button{display:flex}
+.refund{max-width:640px;margin:32px auto 8px;font-size:15px;line-height:1.6;color:#d7dce5}
+.checkout-note{max-width:640px;margin:24px auto 0;font-size:14px;line-height:1.55;color:#aeb6c2}
+.refund a,.manage a,.plans-section .free-note a{color:#b8f5d9;text-decoration:underline;text-underline-offset:4px}
+.manage{margin:0 0 18px;font-size:13px}.plans-section .free-note{max-width:640px;margin:0 auto 10px;line-height:1.6}
+.supports{margin:0;font-size:13px;color:#aeb4be}
+.support-panel h2{max-width:640px;font-size:clamp(26px,2.6vw,36px);letter-spacing:-.5px;line-height:1.2}
+.support-action .secondary{padding:6px;font-size:14px;text-align:center}
+@media(max-width:1000px){.hero{grid-template-columns:1fr}}
+@media(max-width:600px){h1{font-size:38px;letter-spacing:-1px}.hero-benefits{font-size:15px}.membership-actions{display:grid;justify-items:stretch}.plans{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.plan{padding:26px 14px 16px;border-radius:16px}.plan h3{font-size:14px}.plan-price strong{font-size:30px;letter-spacing:-1px}.plan-price span{font-size:12px}.plan-note{margin-bottom:16px;font-size:12px}.plan-badge{inset-inline-start:10px;max-width:calc(100% - 20px);padding:4px 8px;font-size:10px}.plan-button{padding:12px 8px;font-size:14px}.refund{font-size:14px}.plans-section h2{margin-bottom:30px}}
+.plan .plan-button{min-height:52px;display:flex;align-items:center;justify-content:center}
+.plan-price span{white-space:nowrap}.plan-badge{top:auto;bottom:calc(100% - 13px)}

@@ -14,7 +14,7 @@ ENV NEXT_PUBLIC_PANEL_MODE=true \
     ARVIO_TRANSLATION_MODE=prebuilt \
     ARVIO_STANDALONE=true
 # Purple brand (matches the Arvio v2 TV app): swap the stock green accent.
-RUN sed -i -e 's/#00d588/#9b5cff/gI' -e 's/rgba(0, 213, 136,/rgba(155, 92, 255,/g' -e 's/#09b3f0/#d16cff/gI' app/*.css \
+RUN find app components -name '*.css' -exec sed -i -e 's/#00d588/#9b5cff/gI' -e 's/rgba(0, 213, 136,/rgba(155, 92, 255,/g' -e 's/#09b3f0/#d16cff/gI' {} + \
  && sed -i -e 's/#0bfab6/#b07cff/gI' public/arvio-wordmark.svg \
  && cp deploy-assets/panel-brand/* public/ \
  && npm run build

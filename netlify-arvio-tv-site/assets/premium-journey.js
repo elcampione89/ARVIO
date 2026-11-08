@@ -29,6 +29,8 @@
     '/ai-subtitles-android-tv/': 'subtitles', '/fire-tv-media-player/': 'firetv',
     '/arvio-web/': 'browser', '/collections-catalogs/': 'collections',
     '/self-host-arvio-web/': 'selfhost', '/browser-playback-guide/': 'playback',
+    // The measurement backend accepts a fixed label set; the iPhone guide reports as browser access.
+    '/arvio-iphone-ipad/': 'browser',
     '/pt-br/guias/': 'guides', '/es/guias/': 'guides',
     '/pt-br/jellyfin-android-tv/': 'jellyfin', '/es/jellyfin-android-tv/': 'jellyfin',
     '/pt-br/plex-emby-jellyfin/': 'servers', '/es/plex-emby-jellyfin/': 'servers',

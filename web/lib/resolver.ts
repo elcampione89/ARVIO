@@ -1,4 +1,5 @@
 import { config } from "./config";
+import { currentStreamTicket } from "./streamTicket";
 import type { InstalledAddon, MediaItem, StreamSource } from "./types";
 
 type ResolverEvent =
@@ -74,7 +75,16 @@ export function resolverMediaUrl(url: string, headers?: Record<string, string>) 
   if (headers && Object.keys(headers).length > 0) {
     endpoint.searchParams.set("h", btoa(JSON.stringify(headers)));
   }
+  withStreamTicket(endpoint);
   return endpoint.toString();
+}
+
+// The relay can be limited to Premium members (STREAM_TICKET_SECRET on the
+// worker); the ticket rides on every /media URL, and the worker passes it on
+// to playlist segments.
+function withStreamTicket(endpoint: URL) {
+  const ticket = currentStreamTicket();
+  if (ticket) endpoint.searchParams.set("t", ticket);
 }
 
 /** Relay only a selected source that explicitly requires browser-controlled headers. */
@@ -113,6 +123,7 @@ export function resolverDownloadUrl(url: string, filename: string) {
   endpoint.searchParams.set("url", url);
   endpoint.searchParams.set("dl", "1");
   endpoint.searchParams.set("filename", filename);
+  withStreamTicket(endpoint);
   return endpoint.toString();
 }
 

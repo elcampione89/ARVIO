@@ -70,7 +70,9 @@ test('YouTube progress round trips through account sync with native identity and
     './storage': storage(),
     './config': { config: { netlifyBackendUrl: 'https://backend.invalid' }, hasNetlifyBackendUrl: () => true },
     './homeserver': {}, './iptv': {}, './mediaImages': { tmdbImageUrl: (_base, path) => path ?? '' },
-    './http': { jsonRequest: async (_url, request) => {
+    './http': { jsonRequest: async (url, request) => {
+      // A backend without the single-item progress endpoint: the full-document write is used.
+      if (url.endsWith('account-sync-progress')) throw Object.assign(new Error('Not found'), { status: 404 });
       if (request?.method === 'POST') { payload = JSON.parse(request.body).payload; return { accepted: true }; }
       return { payload };
     } }

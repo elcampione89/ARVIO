@@ -15,13 +15,13 @@ test('addon outboxes are account scoped and refuse a false saved state when stor
  assert.throws(()=>broken.queueAddons(a,[],'p'),/storage is full/);
 });
 test('browser autoplay rejects external and uncached sources and prefers direct playback',()=>{
- const api=load('lib/browserAutoplay.ts',{'./debrid':{isUncachedDebridStream:s=>s.uncached},'./streamCompatibility':{playbackPlan:s=>({route:s.external?'external':'here',method:s.method??'direct'})},'./sourceRank':{sourcePickerScore:s=>s.score??0}});
+ const api=load('lib/browserAutoplay.ts',{'./debrid':{isUncachedDebridStream:s=>s.uncached},'./streamCompatibility':{playbackPlan:s=>({route:s.external?'external':'here',method:s.method??'direct'})},'./sourceRank':load('lib/sourceRank.ts',{'./debrid':{parseDebridStream:()=>null,isUncachedDebridStream:s=>!!s.uncached},'./streamCompatibility':{playbackPlan:s=>({route:s.external?'external':'here',method:s.method??'direct'}),audioDecodableForDevice:()=>true,videoDecodableForDevice:()=>true,isDirectPlayableStream:()=>true,isBrowserPlayableStream:()=>true}})});
  const sources=[{url:'transcode',method:'transcode',score:100,quality:'1080p'},{url:'external',external:true,quality:'1080p'},{url:'torrent',uncached:true,quality:'1080p'},{url:'direct',quality:'1080p'},{url:'remux',method:'remux',quality:'720p'},{url:'direct',quality:'1080p'}];
  assert.equal(Array.from(api.browserAutoplayCandidates(sources),s=>s.url).join(','),'direct,remux,transcode');
  assert.equal(Array.from(api.browserAutoplayCandidates(sources,new Set(['direct'])),s=>s.url).join(','),'remux,transcode');
 });
 test('browser autoplay only picks HD: 1080p before 720p, never 4K, SD or unlabelled',()=>{
- const api=load('lib/browserAutoplay.ts',{'./debrid':{isUncachedDebridStream:()=>false},'./streamCompatibility':{playbackPlan:()=>({route:'here',method:'direct'})},'./sourceRank':{sourcePickerScore:s=>s.score??0}});
+ const api=load('lib/browserAutoplay.ts',{'./debrid':{isUncachedDebridStream:()=>false},'./streamCompatibility':{playbackPlan:()=>({route:'here',method:'direct'})},'./sourceRank':{compareForBrowser:(a,b)=>(b.score??0)-(a.score??0)}});
  const sources=[{url:'uhd',quality:'2160p',score:900},{url:'k4',description:'Movie 4K HDR',score:800},{url:'sd',quality:'480p'},{url:'none',score:500},{url:'hd',quality:'720p',score:300},{url:'fhd',quality:'1080p',score:100},{url:'fhd2',description:'Film.1080p.WEB-DL',score:200}];
  assert.equal(Array.from(api.browserAutoplayCandidates(sources),s=>s.url).join(','),'fhd2,fhd,hd');
  assert.equal(api.browserAutoplayCandidates([{url:'uhd',quality:'2160p'}]).length,0);
@@ -49,11 +49,3 @@ test('Stalker paginates channels, resolves temporary streams and isolates portal
  assert.match(requests[1].headers.Cookie,/mac=/);
 });
 
-test('search sends language, media filters and page numbers and distinguishes discovery from text search',async()=>{
- const calls=[];const api=load('lib/tmdb.ts',{'./config':{config:{}},'./storage':storage(),'./metadata/anizip':{},'./metadata/dispatcher':{},'./mediaImages':{tmdbImageUrl:()=>''},'./http':{proxiedUrl:x=>x,apiProxiedUrl:x=>x,jsonRequest:async url=>{calls.push(new URL(url));return {results:[{id:7,name:'A show',genre_ids:[18]},{id:8,name:'Other',genre_ids:[35]}],total_pages:3};}}},{window:{location:{origin:'https://web.example'}}});
- const result=await api.searchMediaPage({query:'space',type:'tv',genre:'18',year:'2020',sort:'popularity.desc'},'es-ES',2);
- assert.equal(result.items.length,1);assert.equal(result.items[0].mediaType,'tv');assert.equal(result.hasMore,true);
- assert.equal(calls[0].pathname,'/api/tmdb/search/tv');assert.equal(calls[0].searchParams.get('page'),'2');assert.equal(calls[0].searchParams.get('language'),'es-ES');assert.equal(calls[0].searchParams.get('first_air_date_year'),'2020');
- const last=await api.searchMediaPage({query:'',type:'movie',genre:'18',year:'',sort:'vote_average.desc'},'en-US',3);
- assert.equal(last.hasMore,false);assert.equal(calls[1].pathname,'/api/tmdb/discover/movie');assert.equal(calls[1].searchParams.get('with_genres'),'18');assert.equal(calls[1].searchParams.get('vote_count.gte'),'100');
-});

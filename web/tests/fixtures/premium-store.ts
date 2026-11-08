@@ -15,6 +15,8 @@ export function setFixtureAccount(userId: string | null) {
   for (const listener of listeners) listener();
 }
 export function setFixtureView(next: string) { view = next; for (const listener of listeners) listener(); }
+export const useAppPick = (..._keys: string[]) => useApp();
+export const useAppSelector = <T>(select: (store: ReturnType<typeof useApp>) => T) => select(useApp());
 export const useApp = () => {
   const auth = useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => authClient.session);
   const currentView = useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => view);

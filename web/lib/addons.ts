@@ -21,6 +21,7 @@ type RawManifest = {
   idPrefixes?: string[];
   catalogs?: AddonCatalog[] | Record<string, unknown>;
   resources?: Array<string | { name?: string; types?: string[]; idPrefixes?: string[] }>;
+  behaviorHints?: { adult?: boolean; p2p?: boolean; configurable?: boolean; configurationRequired?: boolean };
 };
 
 type RawStream = {
@@ -243,7 +244,13 @@ export async function installAddon(rawUrl: string) {
         id: String((catalog as { id?: string })?.id ?? ""),
         name: String((catalog as { name?: string })?.name ?? (catalog as { id?: string })?.id ?? "")
       })),
-      behaviorHints: {}
+      // Same booleans as Android's AddonBehaviorHints; "configurable" drives the Configure link.
+      behaviorHints: {
+        adult: manifest.behaviorHints?.adult === true,
+        p2p: manifest.behaviorHints?.p2p === true,
+        configurable: manifest.behaviorHints?.configurable === true,
+        configurationRequired: manifest.behaviorHints?.configurationRequired === true
+      }
     }
   })!;
 }
@@ -279,19 +286,37 @@ export async function getStreamsProgressive(
     return visible(await getBrowserStreamsProgressive(owners, item, season, episode, update, native.ids, native.requestType));
   }
   if (hasResolverConfig()) {
-    const browserPromise = getBrowserStreamsProgressive(addons, item, season, episode, update)
+    // Two lookups run side by side (this browser and the relay). Each progress
+    // update publishes BOTH lists merged — publishing one path's list alone
+    // replaced the other's rows on screen — and every row, the relay's
+    // included, gets the title's addon subtitles (the relay returns none).
+    let browserLatest: StreamSource[] = [];
+    let resolverLatest: StreamSource[] = [];
+    let subtitles: SubtitleTrack[] = [];
+    const combine = () => sortStreams(dedupeStreams([...browserLatest, ...resolverLatest])
+      .filter((stream) => !hidden(stream) && (stream.url || stream.infoHash || stream.description || stream.source)))
+      .map((stream) => attachSubtitles(stream, subtitles));
+    const publish = (batch: StreamSource[]) => update?.(combine(), batch.map((stream) => attachSubtitles(stream, subtitles)));
+    const subtitleTask = fetchSubtitlesForItem(addons, item, season, episode).then((found) => {
+      subtitles = found;
+      if (found.length && (browserLatest.length || resolverLatest.length)) publish([]);
+      return found;
+    });
+    const browserPromise = getBrowserStreamsProgressive(addons, item, season, episode, (all, batch) => { browserLatest = all; publish(batch); }, undefined, undefined, subtitleTask)
       .catch((error) => {
         console.warn("ARVIO browser addon lookup failed.", error);
         return [] as StreamSource[];
       });
-    const resolverPromise = getResolverStreamsProgressive(addons, item, season, episode, update)
+    const resolverPromise = getResolverStreamsProgressive(addons, item, season, episode, (all, batch) => { resolverLatest = all; publish(batch); })
       .catch((error) => {
         console.warn("ARVIO resolver unavailable, using browser addon lookup.", error);
         return [] as StreamSource[];
       });
     const [browserResolved, resolved] = await Promise.all([browserPromise, resolverPromise]);
-    const merged = sortStreams(dedupeStreams([...browserResolved, ...resolved])
-      .filter((stream) => !hidden(stream) && (stream.url || stream.infoHash || stream.description || stream.source)));
+    browserLatest = browserResolved;
+    resolverLatest = resolved;
+    await subtitleTask;
+    const merged = combine();
     if (merged.length) onUpdate?.(merged, visible(browserResolved));
     return merged;
   }
@@ -307,7 +332,10 @@ async function getBrowserStreamsProgressive(
   onUpdate?: (streams: StreamSource[], batch: StreamSource[]) => void,
   nativeIds?: string[],
   // A native item's own type ("tv", "Podcasts"); strict addons route /stream by it.
-  nativeType?: string
+  nativeType?: string,
+  // Subtitles already being fetched for this title by the caller (shared, so
+  // they are requested once).
+  subtitleTask?: Promise<SubtitleTrack[]>
 ) {
   const type = item.mediaType === "tv" ? "series" : "movie";
   const ids = nativeIds ?? streamIds(item, season, episode);
@@ -323,7 +351,7 @@ async function getBrowserStreamsProgressive(
   }
   let aggregate: StreamSource[] = [];
   let sharedSubtitles: SubtitleTrack[] = [];
-  const subtitlePromise = queryAllAddonSubtitles(subtitleAddons, type, ids)
+  const subtitlePromise = (subtitleTask ?? queryAllAddonSubtitles(subtitleAddons, type, ids))
     .then((subtitles) => {
       sharedSubtitles = subtitles;
       if (subtitles.length && aggregate.length) {

@@ -217,3 +217,24 @@ export async function trackPremiumDaily(
     return recorded;
   } finally { inFlight.delete(key); }
 }
+
+// Per-attempt diagnostics (currently playback failures). Unlike the daily
+// helper above, every attempt is sent — so the page caps them: one broken
+// title hopping through 40 dead links must not become 40 function calls. The
+// server folds attempts into the account's single daily record.
+const ATTEMPT_LIMIT_PER_PAGE = 12;
+const attemptsSent = new Map<string, number>();
+
+export async function trackPremiumAttempt(
+  auth: AuthClient,
+  eventName: Extract<PremiumFunnelEvent, "playback_failed">,
+  metadata: Record<string, string | number | boolean> = {},
+  limit = ATTEMPT_LIMIT_PER_PAGE
+) {
+  if (!analyticsAllowed() || !config.paywallEnabled || !auth.session) return false;
+  const key = `${auth.session.userId}.${eventName}`;
+  const sent = attemptsSent.get(key) ?? 0;
+  if (sent >= limit) return false;
+  attemptsSent.set(key, sent + 1);
+  return trackPremiumEvent(auth, eventName, { ...metadata, attempt: true });
+}

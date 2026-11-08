@@ -123,6 +123,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.arflix.tv.R
+import com.arflix.tv.ui.theme.BackgroundElevated
 import com.arflix.tv.ui.theme.Pink
 import com.arflix.tv.ui.theme.ArflixTypography
 import com.arflix.tv.ui.theme.TextSecondary
@@ -538,8 +539,8 @@ private fun catchupPlaybackVariant(
 }
 
 @Composable
-private fun LiveTvRenderBoundary(content: @Composable () -> Unit) {
-    content()
+private fun LiveTvRenderBoundary(groupNames: Map<String, String> = emptyMap(), content: @Composable () -> Unit) {
+    androidx.compose.runtime.CompositionLocalProvider(LocalLiveGroupNames provides groupNames, content = content)
 }
 
 @Composable
@@ -1104,6 +1105,12 @@ fun LiveTvScreen(
     // Category switches are served from prebuilt buckets. Favorites and
     // recents remain ordered dynamic lists, but they are simple id lookups.
     val filteredChannelsState = remember { mutableStateOf<List<EnrichedChannel>>(emptyList()) }
+    // Manual channel order per category, set in ARVIO Web Settings and synced through the cloud.
+    val manualChannelOrder by remember(viewModel) { viewModel.iptvRepository.observeChannelOrder() }
+        .collectAsStateWithLifecycle(initialValue = emptyMap())
+    // Category names set in ARVIO Web Settings; keys keep the playlist's own names.
+    val liveGroupNames by remember(viewModel) { viewModel.iptvRepository.observeGroupNames() }
+        .collectAsStateWithLifecycle(initialValue = emptyMap())
     var filteredChannelsCategoryKey by remember { mutableStateOf<String?>(null) }
     var filteredChannelsScopeKey by remember { mutableStateOf(categoryScope) }
     val recentsFilterKey = if (selectedCategoryId == "recent") recents.value else Unit
@@ -1123,6 +1130,7 @@ fun LiveTvScreen(
         restrictedGroupSet,
         lastKnownPagedTotal,
         lastKnownPlaylistGroupCounts,
+        manualChannelOrder,
     ) {
         val tree = visibleEnrichedState.value.tree
         val categoryCount = when (selectedCategoryId) {
@@ -1217,7 +1225,7 @@ fun LiveTvScreen(
         // outgoing one-row favorites would clamp the restored All position.
         filteredChannelsScopeKey = categoryScope
         filteredChannelsState.value = prepareGuideChannels(
-            result, selectedCategoryId, state.snapshot.sortOrder, hiddenGroupSet, restrictedGroupSet
+            result, selectedCategoryId, state.snapshot.sortOrder, hiddenGroupSet, restrictedGroupSet, manualChannelOrder
         )
     }
     val visibleChannels = visibleEnrichedState.value.all
@@ -3983,7 +3991,7 @@ fun LiveTvScreen(
         val compactTouchLayout = isTouchDevice && maxWidth < 900.dp
         val landscapeCompactMiniPlayer =
             miniPlayerLayout == LiveTvMiniPlayerLayout.LANDSCAPE_COMPACT
-        LiveTvRenderBoundary {
+        LiveTvRenderBoundary(liveGroupNames) {
             // Content area starts below the translucent top bar so it doesn't get
             // overwritten.
             if (isFullScreen) {
@@ -4226,7 +4234,7 @@ fun LiveTvScreen(
                         channels = filteredChannels,
                         playbackQuality = playbackQuality,
                         totalChannelCount = selectedCategoryTotalCount,
-                        categoryTitle = sportsSidebarTree.byId(selectedCategoryId)?.label ?: "All Channels",
+                        categoryTitle = sportsSidebarTree.byId(selectedCategoryId)?.let { customGroupName(it, liveGroupNames) ?: it.label } ?: "All Channels",
                         clockTickMillis = guideClockMillis,
                         nowNext = effectiveGuideNowNext,
                         indexedGuideNowNext = indexedGuideNowNext,
@@ -4388,7 +4396,7 @@ fun LiveTvScreen(
                         sidebarOpen = sidebarExpanded,
                         channels = filteredChannels,
                         playbackQuality = playbackQuality,
-                        categoryTitle = sportsSidebarTree.byId(selectedCategoryId)?.label ?: "All Channels",
+                        categoryTitle = sportsSidebarTree.byId(selectedCategoryId)?.let { customGroupName(it, liveGroupNames) ?: it.label } ?: "All Channels",
                         totalChannelCount = selectedCategoryTotalCount,
                         clockTickMillis = guideClockMillis,
                         nowNext = effectiveGuideNowNext,
@@ -5100,7 +5108,7 @@ fun LiveTvScreen(
                         )
                     }
                 },
-                containerColor = Color(0xFF1A1A1A),
+                containerColor = BackgroundElevated,
                 tonalElevation = 8.dp,
             )
         }
@@ -5174,7 +5182,7 @@ fun LiveTvScreen(
                         )
                     }
                 },
-                containerColor = Color(0xFF1A1A1A),
+                containerColor = BackgroundElevated,
             )
             }
         }

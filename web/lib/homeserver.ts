@@ -184,8 +184,10 @@ export async function buildHomeServerCatalogConfigs(
   const generated: CatalogConfig[] = [];
 
   for (const server of servers) {
+    // Servers and libraries switched off in Settings (synced with Android) get no Home row.
+    if (server.enabled === false) continue;
     for (const collection of server.collections ?? []) {
-      if (!collection.id || !isVideoCollectionType(collection.type)) continue;
+      if (!collection.id || !isVideoCollectionType(collection.type) || collection.enabled === false) continue;
       const identity = await homeServerCatalogIdentity(server, collection);
       const existing = savedById.get(identity.id) ?? savedBySourceRef.get(identity.sourceRef);
       const title = existing?.name || existing?.title || `${server.name} - ${collection.name}`;

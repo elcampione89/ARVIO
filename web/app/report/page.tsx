@@ -2,17 +2,36 @@
 
 import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { LanguageProvider, useTranslation } from "@/lib/i18n";
 
 const DISCORD_URL = "https://discord.gg/UavuEYMfQ4";
 
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* try the legacy path */ }
+  try {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    document.body.appendChild(textArea);
+    textArea.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textArea);
+    return ok;
+  } catch { return false; }
+}
+
 function ReportContent() {
+  const translateUi = useTranslation();
   const searchParams = useSearchParams();
+  // The Android app opens this page with ?id=…&v=…&err=… after a crash.
+  const bare = !searchParams.get("id") && !searchParams.get("err") && !searchParams.get("error");
   const id = searchParams.get("id") || "N/A";
   const version = searchParams.get("v") || searchParams.get("version") || "1.0";
   const error = searchParams.get("err") || searchParams.get("error") || "Unexpected crash";
   const timeParam = searchParams.get("t") || searchParams.get("time");
 
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const [timeStr, setTimeStr] = useState("Just now");
 
   useEffect(() => {
@@ -28,7 +47,8 @@ function ReportContent() {
     }
   }, [timeParam]);
 
-  const firebase = searchParams.get("provider") === "firebase";
+  const isSentry = searchParams.get("provider") === "sentry";
+  const firebase = !isSentry;
   const dashboard = firebase
     ? "https://console.firebase.google.com/project/arvio-15c5a/crashlytics"
     : id !== "N/A" ? `https://sentry.io/issues/?query=id%3A${encodeURIComponent(id)}` : "N/A";
@@ -41,27 +61,20 @@ ${firebase ? `**Report reference:** \`arvio_report_id=${id}\`` : ""}
 **Time:** ${timeStr}
 **Error:** ${error}`;
 
+  // Only say "Copied" when it was; otherwise leave the report on screen to copy by hand.
   const handleCopyAndRedirect = async () => {
-    try {
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(reportText);
-      } else {
-        const textArea = document.createElement("textarea");
-        textArea.value = reportText;
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textArea);
-      }
-    } catch {
-      // Fallback ignore
-    }
-
-    setCopied(true);
-    setTimeout(() => {
-      window.location.href = DISCORD_URL;
-    }, 700);
+    const ok = await copyText(reportText);
+    setCopied(ok ? "copied" : "failed");
+    if (ok) setTimeout(() => { window.location.href = DISCORD_URL; }, 700);
   };
+  const fields: Array<[string, string, boolean?]> = [
+    [translateUi("Crash ID"), id, true],
+    [firebase ? "Crashlytics" : "Sentry", dashboard],
+    ...(firebase ? [[translateUi("Report reference"), `arvio_report_id=${id}`, true] as [string, string, boolean]] : []),
+    [translateUi("Version"), version],
+    [translateUi("Time"), timeStr],
+    [translateUi("Error"), error]
+  ];
 
   return (
     <div
@@ -108,12 +121,14 @@ ${firebase ? `**Report reference:** \`arvio_report_id=${id}\`` : ""}
         </div>
 
         <h1 style={{ margin: "0 0 8px", fontSize: "26px", fontWeight: 750, color: "#fff" }}>
-          ARVIO Crash Diagnostics
+          {bare ? translateUi("Report a problem") : translateUi("ARVIO crash report")}
         </h1>
         <p style={{ margin: "0 0 24px", color: "#a0a6b2", fontSize: "15px", lineHeight: 1.5 }}>
-          Tap below to instantly copy this bug report to your phone clipboard and open the ARVIO Discord bug channel.
+          {bare
+            ? translateUi("Tell us what happened on the ARVIO Discord. Include your device, the app version and what you were doing.")
+            : translateUi("Copy this report and paste it in the ARVIO Discord bug channel, so we can find what went wrong.")}
         </p>
-
+        {!bare && <>
         <div
           style={{
             background: "rgba(0, 0, 0, 0.45)",
@@ -134,21 +149,18 @@ ${firebase ? `**Report reference:** \`arvio_report_id=${id}\`` : ""}
               marginBottom: "10px"
             }}
           >
-            Formatted Bug Report
+            {translateUi("Report")}
           </div>
-          <pre
-            style={{
-              margin: 0,
-              fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
-              fontSize: "13px",
-              color: "#e0e4eb",
-              lineHeight: 1.6,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word"
-            }}
-          >
-            {reportText}
-          </pre>
+          <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 14px", fontSize: "13px", lineHeight: 1.5 }}>
+            {fields.map(([label, value, code]) => <React.Fragment key={label}>
+              <dt style={{ color: "#a0a6b2", fontWeight: 600 }}>{label}</dt>
+              <dd style={{ margin: 0, color: "#e0e4eb", wordBreak: "break-word", fontFamily: code ? "ui-monospace, SFMono-Regular, Consolas, monospace" : undefined }}>
+                {/^https:\/\//.test(value) ? <a href={value} target="_blank" rel="noopener noreferrer" style={{ color: "#8ab4ff" }}>{value}</a> : value}
+              </dd>
+            </React.Fragment>)}
+          </dl>
+          {copied === "failed" && <textarea readOnly value={reportText} aria-label={translateUi("Report text")} onFocus={(event) => event.currentTarget.select()} autoFocus
+            style={{ width: "100%", minHeight: "140px", marginTop: "14px", padding: "10px", borderRadius: "10px", border: "1px solid #444", background: "#0b0b0b", color: "#e0e4eb", fontSize: "12px", fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace" }} />}
         </div>
 
         <button
@@ -157,21 +169,23 @@ ${firebase ? `**Report reference:** \`arvio_report_id=${id}\`` : ""}
             width: "100%",
             padding: "16px 22px",
             borderRadius: "14px",
-            background: copied ? "#10b981" : "#5865f2",
+            background: copied === "copied" ? "#10b981" : "#5865f2",
             color: "#ffffff",
             fontSize: "16px",
             fontWeight: 650,
             border: "none",
             cursor: "pointer",
             transition: "all 0.2s ease",
-            boxShadow: copied
+            boxShadow: copied === "copied"
               ? "0 8px 24px rgba(16, 185, 129, 0.4)"
               : "0 8px 24px rgba(88, 101, 242, 0.4)",
             marginBottom: "16px"
           }}
         >
-          {copied ? "Copied! Redirecting to Discord..." : "Copy Report & Open Discord"}
+          {copied === "copied" ? translateUi("Copied. Opening Discord…") : copied === "failed" ? translateUi("Couldn't copy: select the text above") : translateUi("Copy report and open Discord")}
         </button>
+        </>}
+        {copied === "failed" && <p role="alert" style={{ margin: "0 0 12px", color: "#ffb4ab", fontSize: "14px" }}>{translateUi("Your browser blocked copying. Select the report text, copy it, then open Discord.")}</p>}
 
         <div>
           <a
@@ -184,7 +198,7 @@ ${firebase ? `**Report reference:** \`arvio_report_id=${id}\`` : ""}
               padding: "6px 12px"
             }}
           >
-            Open Discord Without Copying &rarr;
+            {bare ? translateUi("Open the ARVIO Discord") : translateUi("Open Discord without copying")} &rarr;
           </a>
         </div>
       </div>
@@ -193,9 +207,14 @@ ${firebase ? `**Report reference:** \`arvio_report_id=${id}\`` : ""}
 }
 
 export default function ReportPage() {
+  // Outside the app shell: follow the browser language.
+  const [language, setLanguage] = useState("en");
+  useEffect(() => setLanguage(navigator.language || "en"), []);
   return (
-    <Suspense fallback={<div style={{ minHeight: "100vh", background: "#050505" }} />}>
-      <ReportContent />
-    </Suspense>
+    <LanguageProvider language={language}>
+      <Suspense fallback={<div style={{ minHeight: "100vh", background: "#050505" }} />}>
+        <ReportContent />
+      </Suspense>
+    </LanguageProvider>
   );
 }

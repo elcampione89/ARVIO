@@ -386,6 +386,11 @@ class StreamIntegrationRepository @Inject constructor(
         return moveProviderItem(id, direction = 1)
     }
 
+    /** Moves a source several places at once, in one write - for a row dragged on the phone. */
+    suspend fun moveProviderItemBy(id: String, steps: Int): Boolean {
+        return moveProviderItem(id, direction = steps)
+    }
+
     private suspend fun moveProviderItem(id: String, direction: Int): Boolean {
         if (direction == 0) return false
         val profileId = profileManager.getProfileId()
@@ -472,7 +477,7 @@ class StreamIntegrationRepository @Inject constructor(
      */
     fun observeSearchMode(): Flow<StreamSearchMode> {
         return profileManager.activeProfileId.flatMapLatest { profileId ->
-            context.settingsDataStore.data.map { prefs ->
+            context.effectiveSettingsDataStore.data.map { prefs ->
                 StreamSearchMode.fromId(prefs[searchModeKey(profileId)])
             }
         }
@@ -480,13 +485,13 @@ class StreamIntegrationRepository @Inject constructor(
 
     suspend fun getSearchMode(): StreamSearchMode {
         val profileId = profileManager.getProfileId()
-        val prefs = context.settingsDataStore.data.first()
+        val prefs = context.effectiveSettingsDataStore.data.first()
         return StreamSearchMode.fromId(prefs[searchModeKey(profileId)])
     }
 
     suspend fun setSearchMode(mode: StreamSearchMode) {
         val profileId = profileManager.getProfileId()
-        context.settingsDataStore.edit { prefs ->
+        context.effectiveSettingsDataStore.edit { prefs ->
             prefs[searchModeKey(profileId)] = mode.id
         }
         invalidationBus.markDirty(

@@ -1,6 +1,6 @@
 import { isUncachedDebridStream } from './debrid';
 import { playbackPlan } from './streamCompatibility';
-import { sourcePickerScore } from './sourceRank';
+import { compareForBrowser } from './sourceRank';
 import type { StreamSource } from './types';
 
 /**
@@ -26,8 +26,8 @@ export function browserAutoplayCandidates(streams: StreamSource[], excluded = ne
     if (!s.url || !url || seen.has(url) || excluded.has(url) || isUncachedDebridStream(s) || playbackPlan(s).route !== 'here') return false;
     if (autoplayResolution(s) === 'other') return false;
     seen.add(url); return true;
-  }).sort((a,b) =>
+  }).sort((a, b) =>
     methodRank[playbackPlan(a).method] - methodRank[playbackPlan(b).method]
     || resRank[autoplayResolution(a)] - resRank[autoplayResolution(b)]
-    || sourcePickerScore(b,'browser') - sourcePickerScore(a,'browser'));
+    || compareForBrowser(a, b));
 }

@@ -26,7 +26,9 @@ export function historyToItem(entry: WatchHistoryEntry): MediaItem {
     durationSeconds: entry.duration_seconds ?? 0,
     streamAddonId: entry.stream_addon_id ?? null,
     activityAt: Date.parse(entry.updated_at ?? entry.paused_at ?? "") || 0,
-    timeRemainingLabel: remaining > 0 ? `${Math.ceil(remaining / 60)}m left` : null
+    ...(entry.is_up_next && entry.media_type === "tv"
+      ? { badge: "Up Next", timeRemainingLabel: "Up next", ...(entry.release_date ? { releaseDate: entry.release_date } : {}) }
+      : { timeRemainingLabel: remaining > 0 ? `${Math.ceil(remaining / 60)}m left` : null })
   };
 }
 

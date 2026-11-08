@@ -19,6 +19,13 @@ let dolbyVision: DolbyVisionProbeResult | undefined;
 const acknowledgements = new Map<number, () => void>();
 const sleep = () => new Promise<void>((resolve) => setTimeout(resolve, 80));
 
+function httpFailureMessage(status: number) {
+  if (status >= 500) return `The source's server is unavailable (HTTP ${status})`;
+  if (status === 401 || status === 403) return `The host refused this link (HTTP ${status}); it may have expired`;
+  if (status === 404 || status === 410) return `The file is no longer on the host (HTTP ${status})`;
+  return `The host rejected the request (HTTP ${status})`;
+}
+
 async function probeInput(command: Extract<RemuxCommand, { type: "probe" }>) {
   let networkRetries = 0;
   input = new Input({ formats: ALL_FORMATS, source: new UrlSource(command.url, {
@@ -42,6 +49,13 @@ async function probeInput(command: Extract<RemuxCommand, { type: "probe" }>) {
         clearTimeout(timer); init?.signal?.removeEventListener("abort", abort); throw error;
       });
       clearTimeout(timer);
+      // Report the host's real answer: a 503 is a server outage, not a
+      // missing range feature.
+      if (response.status >= 400) {
+        await response.body?.cancel();
+        init?.signal?.removeEventListener("abort", abort);
+        throw new Error(httpFailureMessage(response.status));
+      }
       // Range-ignorant hosts otherwise cause UrlSource to cache a whole multi-GB file.
       if (new Headers(init?.headers).has("range") && response.status !== 206) {
         await response.body?.cancel();

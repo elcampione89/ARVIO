@@ -14,7 +14,7 @@ const CHECKOUT_EVENTS = {
   membership_link_failed: "billingLinkFailed", billing_email_verified: "billingOwnershipVerified"
 };
 const CHECKOUT_ENTRIES = new Set(["trial_nav", "trial_mobile_nav", "paywall", "account_settings", "feature_preview"]);
-const CHECKOUT_FLOW_VERSIONS = new Set(["direct_v2", "paid_only_v1"]);
+const CHECKOUT_FLOW_VERSIONS = new Set(["direct_v2", "paid_only_v1", "explore_v1"]);
 
 function summarizeCheckoutDiagnostics(records) {
   const empty = () => Object.fromEntries(Object.values(CHECKOUT_EVENTS).map(name => [name, new Set()]));

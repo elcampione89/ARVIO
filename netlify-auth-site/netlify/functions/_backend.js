@@ -1524,17 +1524,22 @@ async function handleTraktProxy(event) {
     const headers = {
       "content-type": "application/json",
       "trakt-api-key": clientId,
-      "trakt-api-version": "2"
+      "trakt-api-version": "2",
+      // Trakt requires an application User-Agent. Generic Node/undici requests
+      // can be denied at the edge before OAuth is evaluated.
+      "user-agent": "ARVIO/2.2 (+https://arvio.tv)",
+      "accept": "application/json"
     };
     const userToken = event.headers["x-user-token"] || event.headers["X-User-Token"];
     if (userToken) headers.authorization = `Bearer ${userToken}`;
 
     const response = await fetch(traktUrl, { method, headers, body: requestBody });
     const text = await response.text();
-    if (response.status === 403 && /<html|<!doctype html/i.test(text)) {
+    if ([401, 403].includes(response.status) &&
+        (/text\/html/i.test(response.headers.get("content-type") || "") || /<html|<!doctype\s+html/i.test(text))) {
       return json(503, {
         error: "trakt_upstream_blocked",
-        message: "Trakt is temporarily rejecting requests from our server. Your account is still connected; please try again later."
+        message: "Trakt is temporarily blocking this connection. Please try again later."
       });
     }
     let data;
@@ -1548,6 +1553,7 @@ async function handleTraktProxy(event) {
       headers: {
         ...JSON_HEADERS,
         "cache-control": "no-store",
+        ...(response.headers.get("retry-after") ? { "retry-after": response.headers.get("retry-after") } : {}),
         "x-pagination-page": response.headers.get("x-pagination-page") || "",
         "x-pagination-limit": response.headers.get("x-pagination-limit") || "",
         "x-pagination-page-count": response.headers.get("x-pagination-page-count") || "",
@@ -2308,9 +2314,31 @@ async function deletePremiumDataForAccount(event, email) {
     funnelEvents += await deleteBlobPrefix(funnelStore, `events/date/${date}/account/${accountKey}/`);
   }
   const trialEmailJobs = await deleteBlobPrefix(trialEmailStore, `jobs/${accountKey}/`);
-  const entitlementKey = `email/${sha256(normalizedEmail)}.json`;
+  const emailHash = sha256(normalizedEmail);
+  const entitlementRecord = await entitlementStore.get(`email/${emailHash}.json`, { type: "json" }).catch(() => null);
+  const linkedEmail = normalizeEmail(entitlementRecord && entitlementRecord.linkedFrom);
+  const entitlementKey = `email/${emailHash}.json`;
   const entitlementDeleted = await entitlementStore.delete(entitlementKey).then(() => 1).catch(() => 0);
-  return { funnelEvents, trialEmailJobs, entitlementDeleted };
+  // Member emails, invite codes and exit-survey answers (see _member-emails.js,
+  // _referrals.js and premium-exit-survey.js; keys are derived the same way).
+  const memberEmailStore = getStore("premium-member-emails");
+  const memberKey = privacyHash("premium-member-email", normalizedEmail);
+  let memberEmailJobs = await deleteBlobPrefix(memberEmailStore, `jobs/${memberKey}/`);
+  // Pass reminders for a linked account are queued under its billing email.
+  if (linkedEmail && linkedEmail !== normalizedEmail) memberEmailJobs += await deleteBlobPrefix(memberEmailStore, `jobs/${privacyHash("premium-member-email", linkedEmail)}/`);
+  await memberEmailStore.delete(`optout/${memberKey}.json`).catch(() => {});
+  const referralStore = getStore("premium-referrals");
+  const owner = await referralStore.get(`owner/${emailHash}.json`, { type: "json" }).catch(() => null);
+  if (owner?.code) await referralStore.delete(`code/${owner.code}.json`).catch(() => {});
+  await referralStore.delete(`owner/${emailHash}.json`).catch(() => {});
+  await referralStore.delete(`referred/${emailHash}.json`).catch(() => {});
+  const surveyStore = getStore("premium-exit-survey");
+  const surveyKey = privacyHash("premium-exit-survey", normalizedEmail);
+  for (let monthsAgo = 0; monthsAgo < 24; monthsAgo++) {
+    const month = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - monthsAgo, 1)).toISOString().slice(0, 7);
+    await surveyStore.delete(`responses/${month}/${surveyKey}.json`).catch(() => {});
+  }
+  return { funnelEvents, trialEmailJobs, entitlementDeleted, memberEmailJobs };
 }
 
 async function deleteReferencedAuthRecords(store, prefix) {

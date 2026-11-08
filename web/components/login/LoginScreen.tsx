@@ -1,12 +1,13 @@
 "use client";
 import { useTranslation } from "@/lib/i18n";
+import "./login.css";
 
 
 import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { hasNetlifyBackendConfig, hasSupabaseConfig, getAuthPortalUrl } from "@/lib/config";
 import { capturePremiumAttribution } from "@/lib/premiumAnalytics";
-import { useApp } from "@/lib/store";
+import { useAppPick } from "@/lib/store";
 import { partnerLoginRedirect } from "@/lib/partnerLinks";
 import { config } from "@/lib/config";
 import { fetchPanelPortals, selectedPanelServer, setSelectedPanelServer, type PanelPortal } from "@/lib/panel";
@@ -18,7 +19,7 @@ export function LoginScreen() {
 /** Panel mode: sign in with the same line (username + password) as the TV app. */
 function PanelLoginScreen() {
   const translateUi = useTranslation();
-  const { signIn, toast } = useApp();
+  const { signIn, toast } = useAppPick("signIn", "toast");
   const [portals, setPortals] = useState<PanelPortal[] | null>(null);
   const [serverId, setServerId] = useState<number | null>(null);
   const [username, setUsername] = useState("");
@@ -87,9 +88,12 @@ function PanelLoginScreen() {
 
 function CloudLoginScreen() {
   const translateUi = useTranslation();
-  const { backToProfiles, cloudLoginRequired } = useApp();
+  const { backToProfiles, cloudLoginRequired } = useAppPick("backToProfiles", "cloudLoginRequired");
   const cloudConfigured = hasNetlifyBackendConfig() || hasSupabaseConfig();
   const [mounted, setMounted] = useState(false);
+  // Signing in hands over to the ARVIO auth portal right away: show that,
+  // not a Back button that disappears a moment later.
+  const [redirecting] = useState(() => cloudConfigured && typeof window !== "undefined" && !(window.location.hash || "").includes("access_token="));
 
   const redirectToAuthPortal = () => {
     if (typeof window === "undefined") return;
@@ -112,6 +116,16 @@ function CloudLoginScreen() {
     }
   }, [mounted, cloudConfigured]);
 
+  if (redirecting) return (
+    <main className="login-shell login-redirecting" aria-busy="true">
+      <div className="login-card">
+        <img src="/arvio-logo.svg" alt="" className="login-brand-logo" />
+        <p className="login-card-title" role="status">{translateUi("Opening ARVIO sign-in…")}</p>
+        <button type="button" className="secondary login-submit" onClick={redirectToAuthPortal}>{translateUi("Sign In with ARVIO Cloud")}</button>
+      </div>
+    </main>
+  );
+
   return (
     <main className="login-shell">
       {!cloudLoginRequired && (
@@ -123,7 +137,7 @@ function CloudLoginScreen() {
             <img src="/arvio-logo.svg" alt="" className="login-brand-logo" />
             <img src="/arvio-wordmark.svg" alt="ARVIO" className="login-wordmark" />
           </div>
-          <p className="login-tag">{translateUi("Cloud sign-in required")}</p>
+          {cloudLoginRequired && <p className="login-tag">{translateUi("Cloud sign-in required")}</p>}
           <p className="login-sub">{translateUi("Use your ARVIO Cloud account to sync profiles, continue watching, Trakt activity, addons, catalogs, and playback settings across devices.")}</p>
           <div className="login-proof">
             <span>{translateUi("Profiles")}</span>

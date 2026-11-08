@@ -24,6 +24,7 @@ import com.arflix.tv.data.model.StreamSource
 import com.arflix.tv.data.model.Subtitle
 import com.arflix.tv.data.api.TmdbApi
 import com.arflix.tv.data.api.TraktComment
+import com.arflix.tv.data.repository.AddonNotice
 import com.arflix.tv.data.repository.YouTubeCollection
 import com.arflix.tv.data.repository.CloudSyncRepository
 import com.arflix.tv.data.repository.ContinueWatchingMerge
@@ -51,11 +52,12 @@ import com.arflix.tv.util.detectDeviceType
 import com.arflix.tv.data.repository.WatchHistoryRepository
 import com.arflix.tv.data.repository.WatchlistRepository
 import com.arflix.tv.util.AppLogger
+import com.arflix.tv.util.normalizeLanguageCode
 import com.arflix.tv.util.AnimeMapper
 import com.arflix.tv.util.AnimeSeasonStructure
 import com.arflix.tv.util.Constants
 import com.arflix.tv.util.EpisodeAvailability
-import com.arflix.tv.util.settingsDataStore
+import com.arflix.tv.data.repository.effectiveSettingsDataStore as settingsDataStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -118,6 +120,11 @@ data class DetailsUiState(
     val addonOrderedIds: List<String> = emptyList(),
     val isInWatchlist: Boolean = false,
     val showEpisodeRatings: Boolean = false,
+    // Profile audio language as a short code ("de"), or null for Auto/None; ranks the source
+    // list's language badge.
+    val preferredAudioLanguage: String? = null,
+    // Messages addons sent instead of sources (AIOStreams errors), listed under the sources.
+    val addonNotices: List<AddonNotice> = emptyList(),
     // Toast
     val toastMessage: String? = null,
     val toastType: ToastType = ToastType.INFO,
@@ -142,6 +149,8 @@ data class DetailsUiState(
     val playTmdbEpisode: Int? = null,
     val playLabel: String? = null,
     val playPositionMs: Long? = null,
+    // Cached metadata can render before resume history and episode progress have resolved.
+    val isPlaybackTargetReady: Boolean = false,
     val autoPlaySingleSource: Boolean = true,
     val autoPlayMinQuality: String = "Any",
     val animeStructuringStyle: AnimeStructuringStyle = AnimeStructuringStyle.BROADCAST,
@@ -424,6 +433,7 @@ class DetailsViewModel @Inject constructor(
     private fun autoPlayMinQualityKey() = profileManager.profileStringKey("auto_play_min_quality")
     private fun showBudgetKey() = profileManager.profileBooleanKey("show_budget_on_home")
     private fun showEpisodeRatingsKey() = profileManager.profileBooleanKey("show_episode_ratings")
+    private fun defaultAudioLanguageKey() = profileManager.profileStringKey("default_audio_language")
     private fun animeStructuringStyleKey() = profileManager.profileStringKey(AnimeStructuringStyle.PREFERENCE_KEY)
 
     private fun isBlankRating(value: String): Boolean {
@@ -474,6 +484,7 @@ class DetailsViewModel @Inject constructor(
         animeSeasonStructure = null
         availableAnimeStructure = null
         initialLoadComplete = false
+        _uiState.value = _uiState.value.copy(isPlaybackTargetReady = false)
         vodAppendJob?.cancel()
         homeServerAppendJob?.cancel()
         streamListPrewarmJob?.cancel()
@@ -495,6 +506,10 @@ class DetailsViewModel @Inject constructor(
                 val autoPlayMinQuality = normalizeAutoPlayMinQuality(prefs[autoPlayMinQualityKey()])
                 val showBudget = prefs[showBudgetKey()] ?: true
                 val showEpisodeRatings = prefs[showEpisodeRatingsKey()] ?: false
+                val preferredAudioLanguage = prefs[defaultAudioLanguageKey()]
+                    ?.trim()
+                    ?.takeUnless { it.isBlank() || it.startsWith("Auto", ignoreCase = true) || it.equals("None", ignoreCase = true) }
+                    ?.let(::normalizeLanguageCode)
                 val animeStructuringStyle = AnimeStructuringStyle.fromId(prefs[animeStructuringStyleKey()])
 
                 val previousState = _uiState.value
@@ -557,6 +572,11 @@ class DetailsViewModel @Inject constructor(
                     logoUrl = cachedLogoUrl,
                     episodes = cachedEpisodes ?: emptyList(),
                     currentSeason = seasonToLoad,
+                    initialSeasonIndex = (seasonToLoad - 1).coerceAtLeast(0),
+                    initialEpisodeIndex = if (reentry) {
+                        detailEpisodeReturnIndex(cachedEpisodes.orEmpty(), playedIdentity)
+                            ?: previousState.initialEpisodeIndex
+                    } else 0,
                     totalSeasons = cachedTotalSeasons,
                     playSeason = initialSeason,
                     playEpisode = initialEpisode,
@@ -568,6 +588,7 @@ class DetailsViewModel @Inject constructor(
                         null
                     },
                     showEpisodeRatings = showEpisodeRatings,
+                    preferredAudioLanguage = preferredAudioLanguage,
                     autoPlaySingleSource = autoPlaySingleSource,
                     autoPlayMinQuality = autoPlayMinQuality
                 )
@@ -1041,7 +1062,10 @@ class DetailsViewModel @Inject constructor(
                             }
                         }
 
-                        val targetEpisodeForRow = if (initialSeason == seasonToLoad) initialEpisode else null
+                        val targetIdentityForRow = if (initialSeason != null && initialEpisode != null) {
+                            EpisodeIdentity.canonical(initialSeason, initialEpisode)
+                        } else null
+                        val targetIndexForRow = detailEpisodeReturnIndex(decoratedEpisodes, targetIdentityForRow)
                         val nextUnwatchedEpisode = decoratedEpisodes.firstOrNull { !it.isWatched }
                         // Focus the explicit target episode if the caller passed one (deeplink /
                         // Continue Watching tile), otherwise focus the first unwatched episode so
@@ -1050,8 +1074,7 @@ class DetailsViewModel @Inject constructor(
                         // the first episode (index 0) — from there the user can jump to the next
                         // season via the season selector. See issue #117.
                         val initialEpisodeIndex = when {
-                            targetEpisodeForRow != null ->
-                                decoratedEpisodes.indexOfFirst { it.episodeNumber == targetEpisodeForRow }.coerceAtLeast(0)
+                            targetIndexForRow != null -> targetIndexForRow
                             nextUnwatchedEpisode != null ->
                                 decoratedEpisodes.indexOf(nextUnwatchedEpisode).coerceAtLeast(0)
                             else -> 0
@@ -1162,7 +1185,8 @@ class DetailsViewModel @Inject constructor(
                                 playLabel = displayTarget?.let {
                                     context.getString(R.string.continue_season_episode, it.displaySeason, it.displayEpisode)
                                 } ?: matchedResume?.label ?: context.getString(R.string.continue_season_episode, initialSeason, initialEpisode),
-                                playPositionMs = matchedResume?.positionMs
+                                playPositionMs = matchedResume?.positionMs,
+                                isPlaybackTargetReady = true
                             )
                         }
                         return@launch
@@ -1188,7 +1212,8 @@ class DetailsViewModel @Inject constructor(
                                         context.getString(R.string.continue_season_episode, it.displaySeason, it.displayEpisode)
                                     }
                                 } ?: playTarget?.label,
-                                playPositionMs = playTarget?.positionMs
+                                playPositionMs = playTarget?.positionMs,
+                                isPlaybackTargetReady = true
                             )
                         }
                     } else {
@@ -1212,7 +1237,8 @@ class DetailsViewModel @Inject constructor(
                                         context.getString(R.string.continue_season_episode, it.displaySeason, it.displayEpisode)
                                     }
                                 } ?: playTarget?.label,
-                                playPositionMs = playTarget?.positionMs
+                                playPositionMs = playTarget?.positionMs,
+                                isPlaybackTargetReady = true
                             )
                         }
                     }
@@ -2095,6 +2121,7 @@ class DetailsViewModel @Inject constructor(
             completedAddons = 0,
             totalAddons = 0,
             streams = emptyList(),
+            addonNotices = emptyList(),
             streamsEpisodeIdentity = identity,
             recentSource = null,
             subtitles = emptyList(),
@@ -2155,6 +2182,7 @@ class DetailsViewModel @Inject constructor(
                     completedAddons = 0,
                     totalAddons = 0,
                     streams = emptyList(),
+                    addonNotices = emptyList(),
                     streamsEpisodeIdentity = identity,
                     subtitles = emptyList(),
                     addonOrderedIds = unifiedOrderedIds,
@@ -2339,6 +2367,7 @@ class DetailsViewModel @Inject constructor(
                         _uiState.value = _uiState.value.copy(
                             isLoadingStreams = false,
                             streams = emptyList(),
+                            addonNotices = emptyList(),
                             subtitles = emptyList(),
                             hasStreamingAddons = hasAnyStreamProvider(
                                 streamingAddonCount = streamRepository.installedAddons.first()
@@ -2377,6 +2406,7 @@ class DetailsViewModel @Inject constructor(
                             totalAddons = progressive.totalAddons,
                             streams = mergedStreams,
                             subtitles = progressive.subtitles,
+                            addonNotices = progressive.notices,
                             hasStreamingAddons = hasAnyStreamProvider(
                                 streamingAddonCount = addonCount,
                                 hasHomeServerConnections = hasHomeServerConnections,
@@ -2397,6 +2427,7 @@ class DetailsViewModel @Inject constructor(
                         _uiState.value = _uiState.value.copy(
                             isLoadingStreams = false,
                             streams = emptyList(),
+                            addonNotices = emptyList(),
                             subtitles = emptyList(),
                             hasStreamingAddons = hasAnyStreamProvider(
                                 streamingAddonCount = streamRepository.installedAddons.first()
@@ -2442,6 +2473,7 @@ class DetailsViewModel @Inject constructor(
                             totalAddons = progressive.totalAddons,
                             streams = mergedStreams,
                             subtitles = progressive.subtitles,
+                            addonNotices = progressive.notices,
                             hasStreamingAddons = hasAnyStreamProvider(
                                 streamingAddonCount = addonCount,
                                 hasHomeServerConnections = hasHomeServerConnections,
