@@ -239,7 +239,9 @@ export function usePlaybackEngine({ autoSourceHopsRef, currentStreamRef, failure
       return { pageProtocol: window.location.protocol, mse: caps.mse, nativeHls: caps.nativeHls, preferNativeHls: preferNativeHls() };
     };
     const livePlanFor = (url: string, requestHeaders?: Record<string, string>): LivePlan => planLiveAttempts({ url, headers: requestHeaders, xtreamOrigin: liveXtreamOrigin }, liveEnvironment(), {
-      relay: (target) => resolverMediaUrl(target, { ...liveTvProxyHeaders(), ...requestHeaders }),
+      // No resolver configured (panel servers): no relay route at all, so the plan goes
+      // straight to the app backend instead of trying worker routes that cannot exist.
+      relay: config.resolverUrl ? (target) => resolverMediaUrl(target, { ...liveTvProxyHeaders(), ...requestHeaders }) : undefined,
       manifestRelay: (target) => workerManifestUrl(target, requestHeaders),
       manifestDirect: (target) => directManifestUrl(target, requestHeaders),
       appProxy: config.allowNetlifyMediaProxy ? (target) => proxiedUrl(target, { ...liveTvProxyHeaders(), ...requestHeaders }) : undefined

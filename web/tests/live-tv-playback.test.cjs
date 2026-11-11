@@ -545,3 +545,16 @@ test('Strong8K-style failure: timeouts directly, 403 only at the app backend, ht
   const unknown = faults.map((f, i) => i === 0 ? { ...f, fault: { kind: 'network', code: 'STARTUP_TIMEOUT' } } : f);
   assert.notEqual(live.classifyLiveFailure(unknown, ctx).kind, 'provider-refused');
 });
+
+test('panel servers without a relay: http:// Xtream channels go through the app backend, HLS form first', () => {
+  const proxy = (url) => `/api/proxy?url=${encodeURIComponent(url)}`;
+  const routes = { manifestDirect: (url) => `${proxy(url)}&rewrite=direct`, appProxy: proxy };
+  for (const url of ['http://line.example:8080/live/u/p/123.ts', 'http://line.example:8080/live/u/p/123.m3u8']) {
+    const plan = plain(live.planLiveAttempts({ url, xtreamOrigin: 'http://line.example:8080' }, CHROME, routes));
+    assert.equal(plan.blocked, undefined);
+    assert.deepEqual(plan.attempts.slice(0, 2).map((a) => [a.route, a.transport, a.target]), [
+      ['app-proxy', 'hls', 'http://line.example:8080/live/u/p/123.m3u8'],
+      ['app-proxy', 'mpegts', 'http://line.example:8080/live/u/p/123.ts']
+    ]);
+  }
+});

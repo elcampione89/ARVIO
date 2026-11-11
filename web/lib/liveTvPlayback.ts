@@ -206,6 +206,15 @@ export function planLiveAttempts(source: { url: string; headers?: Record<string,
     if (attempt && !attempts.some((existing) => existing.url === attempt.url && existing.transport === attempt.transport && existing.hlsEngine === attempt.hlsEngine)) attempts.push(attempt);
   };
   const reachable = (url: string) => !isInsecureForPage(url, env.pageProtocol);
+  // The app backend relays playlists and segments itself, so each form of the channel
+  // (HLS first: the backend rewrites its segments through itself) gets one try.
+  function addAppProxy() {
+    const ordered = [...targets].sort((a, b) => Number(backendPlaylistTarget(b.url)) - Number(backendPlaylistTarget(a.url)));
+    for (const target of ordered) {
+      const proxied = routes.appProxy?.(target.url);
+      if (proxied) add({ url: proxied, ...target.choices[0], route: "app-proxy", target: target.url, variant: target.variant });
+    }
+  }
   const sendable = browserSendableHeaders(source.headers);
   const direct = (target: (typeof targets)[number], choice: Choice, extra: Partial<LiveAttempt> = {}): LiveAttempt | null => {
     // The browser's own HLS player cannot send headers: with hls.js available
@@ -226,6 +235,11 @@ export function planLiveAttempts(source: { url: string; headers?: Record<string,
     const relayed = routes.relay(target.url);
     if (relayed) for (const choice of target.choices) add({ url: relayed, ...choice, route: "relay", target: target.url, variant: target.variant });
   }
+  // 2b. Builds without a relay (self-hosted panel servers): the app backend relays the
+  //     whole stream, HLS form first (playlist and segments), the way live TV
+  //     played before the route planner. Tried before the manifest-only routes,
+  //     whose http:// segments a secure page would block anyway.
+  if (!routes.relay && routes.appProxy) addAppProxy();
   // 3. HLS playlists through the app backend: segments through the relay
   //    (providers that block Cloudflare), then straight from the provider
   //    (https providers without CORS on the playlist, builds without a relay).
@@ -248,10 +262,7 @@ export function planLiveAttempts(source: { url: string; headers?: Record<string,
     const native = target.choices.find((choice) => choice.hlsEngine === "native");
     if (native && !reachable(target.url)) add(direct(target, native, { startupMs: 6000 }));
   }
-  if (routes.appProxy) {
-    const proxied = routes.appProxy(targets[0].url);
-    if (proxied) add({ url: proxied, ...targets[0].choices[0], route: "app-proxy", target: targets[0].url, variant: targets[0].variant });
-  }
+  if (routes.appProxy) addAppProxy();
   if (!attempts.length) return { attempts, blocked: "insecure", shape };
   return { attempts: attempts.slice(0, MAX_ATTEMPTS), shape };
 }
