@@ -334,6 +334,8 @@ async function loadCatalogUnlimited(
 
   // Favorite TV is the profile's IPTV favorites; Home renders it from the channel list.
   if (catalog.sourceType === "preinstalled" && catalog.id === "favorite_tv") return null;
+  // WeTrakr recommendations need the TV's WeTrakr connection; the web has none.
+  if (catalog.sourceType === "preinstalled" && catalog.id.startsWith("wetrakr_")) return null;
 
   if (catalog.sourceType === "trakt" && catalog.sourceUrl) {
     const refs = await loadTraktPublicList(catalog.sourceUrl) as Array<{ type: MediaType; id: number }>;
@@ -369,7 +371,7 @@ async function loadCatalogUnlimited(
   }
 
   if (catalog.sourceType === "addon") {
-    const items = await loadAddonCatalog(catalog, addons, language, limit);
+    const items = await loadAddonCatalog(catalog, addons, language, limit, homeServers);
     return {
       id: catalog.id,
       title: catalog.name,
@@ -768,15 +770,37 @@ type StremioMeta = {
   year?: string | number;
 };
 
-async function loadAddonCatalog(catalog: CatalogConfig, addons: InstalledAddon[], language: string, limit?: number) {
+async function loadAddonCatalog(
+  catalog: CatalogConfig,
+  addons: InstalledAddon[],
+  language: string,
+  limit?: number,
+  homeServers: HomeServerConfig[] = []
+) {
   const addon = addons.find((candidate) =>
     candidate.id === catalog.addonId ||
     candidate.name === catalog.addonName ||
     candidate.manifestUrl === catalog.sourceUrl
   );
-  const manifestUrl = addon?.manifestUrl || catalog.sourceUrl;
   const requestedType = catalog.addonCatalogType || (catalog.mediaType === "tv" ? "series" : catalog.mediaType === "movie" ? "movie" : "movie");
   const catalogId = catalog.addonCatalogId || catalog.sourceRef || catalog.id;
+
+  // Generic Client-Side Delegation resolution
+  const catalogDecl = (addon?.catalogs ?? []).find(c => c.id === catalogId && String(c.type).toLowerCase() === requestedType.toLowerCase());
+  const delegateUri = catalog.clientDelegate || catalogDecl?.clientDelegate;
+  const effectiveFilter = catalog.clientFilter ?? catalogDecl?.clientFilter;
+  if (delegateUri) {
+    const { loadClientDelegatedCatalog } = await import('./clientCatalogLoader');
+    return loadClientDelegatedCatalog(delegateUri, { ...catalog, clientFilter: effectiveFilter }, homeServers, limit, async seed => {
+      const id = seed.id > 0 ? seed.id : await resolveTmdbId({ mediaType: seed.mediaType, imdbId: seed.imdbId, title: seed.title, year: seed.year }).catch(() => null);
+      if (!id) return null;
+      const details = await getBasicItem(seed.mediaType, id, language).catch(() => null);
+      if (!details) return null;
+      return { ...seed, ...details, id, activityAt: seed.activityAt };
+    });
+  }
+
+  const manifestUrl = addon?.manifestUrl || catalog.sourceUrl;
   // Addons route by the manifest's exact spelling ("Live Docs"); collections may lower-case it.
   const catalogType = (addon?.catalogs ?? []).find(c => c.id === catalogId &&
     String(c.type).toLowerCase() === requestedType.toLowerCase())?.type || requestedType;
@@ -785,11 +809,18 @@ async function loadAddonCatalog(catalog: CatalogConfig, addons: InstalledAddon[]
   const extra = catalog.addonGenre ? `/genre=${encodeURIComponent(catalog.addonGenre)}` : "";
   const url = proxiedUrl(`${base}/catalog/${encodeURIComponent(catalogType)}/${encodeURIComponent(catalogId)}${extra}.json`);
   const payload = await jsonRequest<{ metas?: StremioMeta[] }>(url);
-  // Each meta may cost a TMDB call: a Home row hydrates only what it shows.
-  const metas = (payload.metas ?? []).slice(0, limit ?? Infinity);
+  // Each meta may cost a TMDB call: a Home row hydrates only what it shows unless filtering locally.
+  const rawMetas = payload.metas ?? [];
+  const metas = effectiveFilter ? rawMetas : rawMetas.slice(0, limit ?? Infinity);
   const hydrated = await Promise.all(metas.map((meta) => hydrateAddonMeta(meta, catalog.mediaType, language, addon, addons, catalogType).catch(() => null)));
-  return hydrated.filter((item): item is MediaItem => Boolean(item));
+  const items = hydrated.filter((item): item is MediaItem => Boolean(item));
+  if (effectiveFilter) {
+    const { filterClientCatalogItems } = await import('./clientCatalogLoader');
+    return filterClientCatalogItems(items, effectiveFilter, homeServers, limit);
+  }
+  return items;
 }
+
 
 async function hydrateAddonMeta(
   meta: StremioMeta,

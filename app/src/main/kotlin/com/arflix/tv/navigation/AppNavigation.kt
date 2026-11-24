@@ -90,10 +90,17 @@ sealed class Screen(val route: String) {
     data object Home : Screen("home")
     data object Search : Screen("search")
     data object Watchlist : Screen("watchlist")
-    data object CollectionDetails : Screen("collections/{catalogId}") {
+    data object CollectionDetails : Screen(
+        "collections/{catalogId}?serviceRow={serviceRow}&serviceFilter={serviceFilter}"
+    ) {
         fun createRoute(catalogId: String): String {
             return "collections/${android.net.Uri.encode(catalogId)}"
         }
+
+        /** A row opens its exact query; the header Filter action opens the full service grid. */
+        internal fun createGridRoute(catalogId: String, rowId: String?, filter: String): String =
+            "${createRoute(catalogId)}?serviceFilter=${android.net.Uri.encode(filter)}" +
+                rowId?.let { "&serviceRow=${android.net.Uri.encode(it)}" }.orEmpty()
     }
     data object CategoryViewAll : Screen("home_category/{categoryId}") {
         fun createRoute(categoryId: String): String {
@@ -137,7 +144,7 @@ sealed class Screen(val route: String) {
         }
     }
 
-    data object Player : Screen("player/{mediaType}/{mediaId}?seasonNumber={seasonNumber}&episodeNumber={episodeNumber}&tmdbSeasonNumber={tmdbSeasonNumber}&tmdbEpisodeNumber={tmdbEpisodeNumber}&kitsuId={kitsuId}&kitsuEpisodeNumber={kitsuEpisodeNumber}&imdbId={imdbId}&streamUrl={streamUrl}&preferredAddonId={preferredAddonId}&preferredSourceName={preferredSourceName}&preferredBingeGroup={preferredBingeGroup}&startPositionMs={startPositionMs}&isLiveStream={isLiveStream}") {
+    data object Player : Screen("player/{mediaType}/{mediaId}?seasonNumber={seasonNumber}&episodeNumber={episodeNumber}&tmdbSeasonNumber={tmdbSeasonNumber}&tmdbEpisodeNumber={tmdbEpisodeNumber}&kitsuId={kitsuId}&kitsuEpisodeNumber={kitsuEpisodeNumber}&imdbId={imdbId}&streamUrl={streamUrl}&preferredAddonId={preferredAddonId}&preferredSourceName={preferredSourceName}&preferredBingeGroup={preferredBingeGroup}&startPositionMs={startPositionMs}&isLiveStream={isLiveStream}&iptvSourceId={iptvSourceId}") {
         fun createRoute(
             mediaType: MediaType,
             mediaId: Int,
@@ -153,7 +160,8 @@ sealed class Screen(val route: String) {
             preferredSourceName: String? = null,
             preferredBingeGroup: String? = null,
             startPositionMs: Long? = null,
-            isLiveStream: Boolean = false
+            isLiveStream: Boolean = false,
+            iptvSourceId: String? = null
         ): String {
             val base = "player/${mediaType.name.lowercase()}/$mediaId"
             val params = mutableListOf<String>()
@@ -170,6 +178,7 @@ sealed class Screen(val route: String) {
             preferredBingeGroup?.let { params.add("preferredBingeGroup=${android.net.Uri.encode(it)}") }
             startPositionMs?.let { params.add("startPositionMs=$it") }
             if (isLiveStream) params.add("isLiveStream=true")
+            iptvSourceId?.let { params.add("iptvSourceId=${android.net.Uri.encode(it)}") }
             return if (params.isNotEmpty()) "$base?${params.joinToString("&")}" else base
         }
     }
@@ -484,7 +493,13 @@ fun AppNavigation(
                         onSwitchProfile()
                         navController.navigateToProfileSelection()
                     },
-                    onBack = { navController.popBackStack() },
+                    onBack = {
+                        if (currentProfile == null) {
+                            navController.navigateToProfileSelection()
+                        } else {
+                            navController.popBackStack()
+                        }
+                    },
                     onSubPageChanged = { settingsHasSubPage = it; onSettingsSubPageChanged(it) }
                 )
             }
@@ -505,9 +520,6 @@ fun AppNavigation(
                     }
                 },
                 onShowAddProfile = { /* Handled internally by ProfileSelectionScreen */ },
-                onConnectCloud = {
-                    navController.navigate("settings?autoCloudAuth=true")
-                },
                 isCloudConnected = isCloudConnected
             )
         }
@@ -515,9 +527,14 @@ fun AppNavigation(
         // Details screen
         composable(
             route = Screen.CollectionDetails.route,
-            arguments = listOf(navArgument("catalogId") { type = NavType.StringType })
+            arguments = listOf(
+                navArgument("catalogId") { type = NavType.StringType },
+                navArgument("serviceRow") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("serviceFilter") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )
         ) { backStackEntry ->
             val catalogId = backStackEntry.arguments?.getString("catalogId").orEmpty()
+            val gridArgs = backStackEntry.arguments
             if (catalogId.isBlank()) {
                 navigateHome()
                 return@composable
@@ -525,8 +542,16 @@ fun AppNavigation(
             CollectionDetailsScreen(
                 catalogId = catalogId,
                 currentProfile = currentProfile,
+                serviceRowId = gridArgs?.getString("serviceRow"),
+                serviceFilter = gridArgs?.getString("serviceFilter"),
                 onNavigateToDetails = { mediaType, mediaId ->
                     navController.navigate(Screen.Details.createRoute(mediaType, mediaId))
+                },
+                onNavigateToDetailsAutoPlay = { mediaType, mediaId ->
+                    navController.navigate(Screen.Details.createRoute(mediaType, mediaId, autoPlay = true))
+                },
+                onOpenServiceGrid = { serviceId, rowId, filter ->
+                    navController.navigate(Screen.CollectionDetails.createGridRoute(serviceId, rowId, filter))
                 },
                 onNavigateToPlayer = { mediaType, mediaId, streamUrl, preferredAddonId, preferredSourceName ->
                     navController.navigate(
@@ -618,7 +643,7 @@ fun AppNavigation(
                     backStackEntry.savedStateHandle["autoPlayHandled"] = true
                 },
                 currentProfile = currentProfile,
-                onNavigateToPlayer = { type, id, identity, imdbId, url, preferredAddonId, preferredSourceName, startPositionMs ->
+                onNavigateToPlayer = { type, id, identity, imdbId, url, preferredAddonId, preferredSourceName, startPositionMs, iptvSourceId ->
                     navController.navigate(
                         Screen.Player.createRoute(
                             mediaType = type,
@@ -633,7 +658,8 @@ fun AppNavigation(
                             streamUrl = url,
                             preferredAddonId = preferredAddonId,
                             preferredSourceName = preferredSourceName,
-                            startPositionMs = startPositionMs
+                            startPositionMs = startPositionMs,
+                            iptvSourceId = iptvSourceId
                         )
                     ) {
                         if (autoPlayArg) {
@@ -729,6 +755,11 @@ fun AppNavigation(
                 navArgument("isLiveStream") {
                     type = NavType.BoolType
                     defaultValue = false
+                },
+                navArgument("iptvSourceId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
                 }
             ),
             exitTransition = { ExitTransition.None },
@@ -751,6 +782,7 @@ fun AppNavigation(
             val preferredBingeGroup = backStackEntry.arguments?.getString("preferredBingeGroup")?.takeIf { it.isNotBlank() }
             val startPositionMs = backStackEntry.arguments?.getLong("startPositionMs")?.takeIf { it >= 0L }
             val isLiveStream = backStackEntry.arguments?.getBoolean("isLiveStream") ?: false
+            val iptvSourceId = backStackEntry.arguments?.getString("iptvSourceId")?.takeIf { it.isNotBlank() }
             val mediaType = if (mediaTypeStr == "tv") MediaType.TV else MediaType.MOVIE
 
             PlayerScreen(
@@ -769,6 +801,7 @@ fun AppNavigation(
                 preferredBingeGroup = preferredBingeGroup,
                 startPositionMs = startPositionMs,
                 isLiveStream = isLiveStream,
+                iptvSourceId = iptvSourceId,
                 onBack = { navController.popBackStack() },
                 onPlayNext = { nextIdentity, nextPreferredAddonId, nextPreferredSourceName, nextPreferredBingeGroup ->
                     // Navigate to next episode

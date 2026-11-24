@@ -56,6 +56,8 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -73,6 +75,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -88,6 +91,9 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -106,6 +112,7 @@ import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
 import coil.size.Precision
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import com.arflix.tv.R
 import com.arflix.tv.data.model.Category
 import com.arflix.tv.data.model.MediaItem
@@ -336,7 +343,8 @@ internal fun NetflixTvHomeRowsLayer(
         var appliedTarget by remember { mutableIntStateOf(-1) }
         var appliedScrollReset by rememberSaveable { mutableIntStateOf(0) }
         val verticalOffset = remember { Animatable(0f) }
-        var verticalAnimating by remember { mutableStateOf(false) }
+        val verticalAnimation = remember { mutableStateOf(false) }
+        var verticalAnimating by verticalAnimation
         LaunchedEffect(targetIndex, focusedRowId, focusState.scrollResetRequest) {
             val previousTarget = appliedTarget
             val reset = appliedScrollReset != focusState.scrollResetRequest
@@ -473,22 +481,37 @@ internal fun NetflixTvHomeRowsLayer(
                             )
                         }
                     } else {
+                        val cacheArtwork = remember(category.items) {
+                            category.items.isNotEmpty() && category.items.none { it.isPlaceholder }
+                        }
+                        val cacheInactiveRow by remember(listState, rowIndex, rowIsFocused, cacheArtwork) {
+                            derivedStateOf {
+                                cacheArtwork && !rowIsFocused &&
+                                    listState.layoutInfo.visibleItemsInfo.any { it.index == rowIndex + 1 }
+                            }
+                        }
+                        val rowFeaturedItem = netflix.featuredItem?.takeIf { featured ->
+                            category.items.any { it.isSameHomeHero(featured) }
+                        }
+                        val rowLogos = rememberNetflixRowLogos(category.items, cardLogoUrls)
                         NetflixContentRow(
                             category = category,
                             scrollResetRequest = focusState.scrollResetRequest,
-                            cardLogoUrls = cardLogoUrls,
+                            cardLogoUrls = rowLogos,
                             isCurrentRow = rowIsFocused,
+                            cacheInactiveRow = cacheInactiveRow,
+                            verticalAnimating = verticalAnimation,
                             collapsesOffScreen = !focusState.isSidebarFocused && !focusState.isHeroFocused &&
                                 rowIndex < focusState.currentRowIndex,
                             focusedItemIndex = focusedItemIndex,
                             restingItemIndex = focusState.rowItemIndicesByCategoryId[category.id] ?: 0,
-                            usePosterCards = rowUsePosterCards,
+                            usePosterCards = true,
                             bigCardHeight = bigCardHeight,
                             startPadding = contentStartPadding,
                             categoryHasMore = rowHasMore,
                             showViewAll = viewAllIndex >= 0,
-                            featuredItem = netflix.featuredItem,
-                            featuredOverview = netflix.featuredOverview,
+                            featuredItem = rowFeaturedItem,
+                            featuredOverview = netflix.featuredOverview.takeIf { rowFeaturedItem != null },
                             onChannelCardPlaced = onChannelCardPlaced,
                             trailerKey = if (rowIsFocused) netflix.cardTrailerKey else null,
                             trailerDelayMs = netflix.cardTrailerDelayMs,
@@ -520,6 +543,16 @@ internal fun NetflixTvHomeRowsLayer(
         }
     }
 }
+
+/** Id prefix of rows drawn with rank ribbons whatever their (translated) title says. */
+internal const val RANKED_ROW_ID_PREFIX = "ranked_"
+
+/**
+ * Rows that show rank ribbons: Home's Top 10 rows, found by their English title, and rows
+ * whose id says so, which keep their ribbons once the title is translated.
+ */
+internal fun isRankedHomeRow(category: Category): Boolean =
+    category.title.contains("Top 10", ignoreCase = true) || category.id.startsWith(RANKED_ROW_ID_PREFIX)
 
 private fun netflixRowIsSpecial(category: Category, isSpecialItem: (MediaItem) -> Boolean): Boolean =
     category.id.startsWith("collection_row_") ||
@@ -785,8 +818,9 @@ private fun NetflixMetaLine(item: MediaItem, fontSize: Int) {
 
 /**
  * A Netflix row. In the focused row the focused title is a wide backdrop card with its
- * description below, and the other titles are posters of the same height. Other rows
- * keep the regular card size.
+ * description below, and the other titles are portrait cards of the same height. Other rows
+ * keep the regular card size. A portrait card shows the middle of the same wide picture
+ * ([sharesWideArt]), so a card that expands widens its picture instead of swapping it.
  */
 @Composable
 private fun NetflixContentRow(
@@ -794,11 +828,13 @@ private fun NetflixContentRow(
     scrollResetRequest: Int,
     cardLogoUrls: Map<String, String>,
     isCurrentRow: Boolean,
+    cacheInactiveRow: Boolean,
+    verticalAnimating: State<Boolean>,
     /** The row sits above the focused one, so the vertical scroll carries it out the top. */
     collapsesOffScreen: Boolean,
     focusedItemIndex: Int,
     restingItemIndex: Int,
-    usePosterCards: Boolean,
+    usePosterCards: Boolean = true,
     bigCardHeight: Dp,
     startPadding: Dp,
     categoryHasMore: Boolean,
@@ -814,7 +850,7 @@ private fun NetflixContentRow(
     onItemClick: (MediaItem) -> Unit
 ) {
     val isContinueWatching = category.id == "continue_watching"
-    val isRanked = category.title.contains("Top 10", ignoreCase = true)
+    val isRanked = isRankedHomeRow(category)
     // Prefetching this row from the vertical list also builds its first cards.
     @OptIn(ExperimentalFoundationApi::class)
     val rowState = rememberLazyListState(
@@ -849,6 +885,32 @@ private fun NetflixContentRow(
         }
     }
     val expanded = isCurrentRow || holdExpanded
+    val settlingForCache = remember(isCurrentRow) {
+        !isCurrentRow && hasComposed[0] && !collapseOffScreen
+    }
+    var cacheSettled by remember(isCurrentRow) { mutableStateOf(!settlingForCache) }
+    LaunchedEffect(settlingForCache) {
+        if (settlingForCache) {
+            delay(NETFLIX_RAIL_MORPH_MS.toLong())
+            cacheSettled = true
+        }
+    }
+    val renderCacheReady = remember { mutableStateOf(false) }
+    LaunchedEffect(cacheInactiveRow, cacheSettled, verticalAnimating) {
+        if (!cacheInactiveRow || !cacheSettled) {
+            renderCacheReady.value = false
+        } else {
+            snapshotFlow { verticalAnimating.value }.collectLatest { moving ->
+                renderCacheReady.value = false
+                if (!moving) {
+                    // Avoid texture creation between successive D-pad moves. Readiness is
+                    // consumed by the graphics layer, not by the row's composition/layout.
+                    delay((NETFLIX_RAIL_MORPH_MS + NETFLIX_COLLAPSE_SETTLE_MS).toLong())
+                    renderCacheReady.value = true
+                }
+            }
+        }
+    }
     val expandedIndex = if (isCurrentRow) focusedItemIndex else restingItemIndex
     val focusedItem = items.getOrNull(expandedIndex)?.takeIf { expanded && !it.isPlaceholder }
     val sizeSpec: AnimationSpec<Dp> =
@@ -882,12 +944,14 @@ private fun NetflixContentRow(
     }
     val latestOnItemClick by rememberUpdatedState(onItemClick)
 
-    val bottomPadding by animateDpAsState(if (expanded) 20.dp else 10.dp,
+    val bottomPadding = animateDpAsState(if (expanded) 20.dp else 10.dp,
         if (collapseOffScreen) snap<Dp>() else tween<Dp>(NETFLIX_RAIL_MORPH_MS), label = "netflixRowSpacing")
     // Scaled at draw time: animating the font size re-measures the text on every frame.
     val headingScale = animateFloatAsState(if (expanded) 1f else NETFLIX_RESTING_HEADING_SCALE,
         if (collapseOffScreen) snap<Float>() else tween<Float>(NETFLIX_RAIL_MORPH_MS), label = "netflixRowHeading")
-    Column(modifier = Modifier.padding(bottom = bottomPadding).testTag("netflix_row_${category.id}")) {
+    Column(modifier = Modifier.netflixRowSpacing(bottomPadding)
+        .netflixRowRenderCache(cacheInactiveRow && cacheSettled, renderCacheReady)
+        .testTag("netflix_row_${category.id}")) {
         Text(
             text = localizedCategoryTitle(category),
             style = ArflixTypography.sectionTitle.copy(
@@ -929,9 +993,12 @@ private fun NetflixContentRow(
                 val cardHeight = if (expanded) bigCardHeight else cardWidth / (if (landscape) (16f / 9f) else (2f / 3f))
                 val animatedWidth = animateDpAsState(cardWidth, sizeSpec, label = "netflixCardWidth")
                 val animatedHeight = animateDpAsState(cardHeight, sizeSpec, label = "netflixCardHeight")
+                // One picture per title, as Netflix does: a portrait card shows the middle of
+                // the wide artwork that it reveals in full when it expands, never a separate poster.
+                val sharedArt = !item.isPlaceholder && sharesWideArt(category, item, isContinueWatching)
                 // Decode once for the target geometry, never once per animation frame.
                 val artwork = if (item.isPlaceholder) null else rememberNetflixArtwork(
-                    item, landscape, cardWidth, cardHeight, isContinueWatching)
+                    item, landscape || sharedArt, cardWidth, cardHeight, isContinueWatching)
                 Box(Modifier.testTag("netflix_morph_${item.mediaType}_${item.id}")) {
                     // The morph size is applied at layout time: the cards get their target
                     // size and are only re-measured each frame, not recomposed.
@@ -984,6 +1051,10 @@ private fun NetflixContentRow(
                             )
                         }
                     }
+                    if (sharedArt && !landscape) {
+                        // The slice rarely shows the title, so the card carries its clear logo.
+                        NetflixSliceTitle(item, cardLogoUrls["${item.mediaType}_${item.id}"], Modifier.matchParentSize())
+                    }
                     if (isRanked && index < 10 && !item.isPlaceholder) {
                         TopRankRibbon(
                             rank = index + 1,
@@ -1028,6 +1099,61 @@ private fun NetflixContentRow(
                     .padding(start = startPadding + 4.dp, end = startPadding, top = 10.dp)
                     .widthIn(max = bigCardWidth + focusedPosterWidth + 12.dp)
                     .fillMaxWidth()
+            )
+        }
+    }
+}
+
+/** The wide picture a title's expanded card shows: the episode still when continuing, else the backdrop. */
+internal fun netflixWideArt(item: MediaItem, watching: Boolean): String? =
+    item.episodeStill?.takeIf { watching && it.isNotBlank() } ?: item.backdrop?.takeIf(String::isNotBlank)
+
+/**
+ * True when [item]'s card shows its wide picture in every shape. Channel cards and collection
+ * tiles keep their own artwork, as does a title without a wide picture.
+ */
+internal fun sharesWideArt(category: Category, item: MediaItem, watching: Boolean): Boolean =
+    !category.id.startsWith("collection_row_") && !item.isIptvChannel() && netflixWideArt(item, watching) != null
+
+/** A portrait card's title over its slice of the wide picture: the clear logo, or the name until one arrives. */
+@Composable
+internal fun NetflixSliceTitle(
+    item: MediaItem,
+    logoUrl: String?,
+    modifier: Modifier = Modifier,
+    imageLoader: coil.ImageLoader = LocalContext.current.imageLoader
+) {
+    var logoLoaded by remember(logoUrl, imageLoader) { mutableStateOf(false) }
+    Box(
+        modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.7f)))
+    ) {
+        if (!logoUrl.isNullOrBlank()) {
+            CardClearLogo(
+                url = logoUrl,
+                imageLoader = imageLoader,
+                onLoadedChanged = { logoLoaded = it },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 10.dp, end = 10.dp, bottom = 14.dp)
+                    .testTag("netflix_slice_logo_${item.mediaType}_${item.id}")
+            )
+        }
+        if (!logoLoaded) {
+            Text(
+                text = item.title,
+                style = ArflixTypography.sectionTitle.copy(
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black,
+                    shadow = NetflixTextShadow
+                ),
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 10.dp, end = 10.dp, bottom = 12.dp)
             )
         }
     }
@@ -1096,6 +1222,57 @@ private fun Modifier.netflixMorphSize(width: State<Dp>, height: State<Dp>): Modi
         layout(w, h) { placeable.place(0, 0) }
     }
 
+/** Row spacing still morphs, but must not recompose all cards on each animation frame. */
+internal fun Modifier.netflixRowSpacing(bottom: State<Dp>): Modifier =
+    layout { measurable, constraints ->
+        val padding = bottom.value.roundToPx().coerceAtLeast(0)
+        val placeable = measurable.measure(constraints.offset(vertical = -padding))
+        layout(placeable.width, constraints.constrainHeight(placeable.height + padding)) {
+            placeable.placeRelative(0, 0)
+        }
+    }
+
+/** Preserve the map identity when enrichment only changes logos in other rails. */
+@Composable
+internal fun rememberNetflixRowLogos(items: List<MediaItem>, logos: Map<String, String>): Map<String, String> {
+    val keys = remember(items) { items.map { "${it.mediaType}_${it.id}" } }
+    val values = keys.map { logos[it] }
+    return remember(keys, values) {
+        buildMap { keys.forEachIndexed { index, key -> values[index]?.let { put(key, it) } } }
+    }
+}
+
+/** Rasterize stationary neighbours once, not their artwork/clips/borders on every scroll frame. */
+internal fun Modifier.netflixRowRenderCache(enabled: Boolean, ready: State<Boolean>? = null): Modifier {
+    if (!enabled) return this
+    // Offscreen layers clip to their bounds. Expand only the layer, not the row's layout,
+    // so shadows and half-outside border strokes retain their original pixels and position.
+    return layout { measurable, constraints ->
+        val pixels = maxOf(16, 8.dp.roundToPx())
+        val extra = pixels * 2
+        val placeable = measurable.measure(constraints.offset(horizontal = extra, vertical = extra))
+        layout(constraints.constrainWidth(placeable.width - extra),
+            constraints.constrainHeight(placeable.height - extra)) {
+            placeable.place(-pixels, -pixels)
+        }
+    }.graphicsLayer {
+        compositingStrategy = if (ready?.value != false) CompositingStrategy.Offscreen else CompositingStrategy.Auto
+    }
+        .layout { measurable, constraints ->
+            val pixels = maxOf(16, 8.dp.roundToPx())
+            val extra = pixels * 2
+            val placeable = measurable.measure(constraints.offset(horizontal = -extra, vertical = -extra))
+            layout(constraints.constrainWidth(placeable.width + extra),
+                constraints.constrainHeight(placeable.height + extra)) {
+                placeable.place(pixels, pixels)
+            }
+        }
+}
+
+/** The smallest 16:9 box that covers a [width] × [height] card. */
+internal fun netflixWideBox(width: Dp, height: Dp): Pair<Dp, Dp> =
+    maxOf(width, height * (16f / 9f)) to maxOf(height, width * (9f / 16f))
+
 /** Keep the current image while loading, then blend the ready poster/backdrop without a blank frame. */
 @Composable
 internal fun rememberNetflixArtwork(
@@ -1104,16 +1281,18 @@ internal fun rememberNetflixArtwork(
 ): Painter {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val raw = if (landscape) item.episodeStill?.takeIf { watching && it.isNotBlank() }
-        ?: item.backdrop?.takeIf(String::isNotBlank) ?: item.image else item.image
+    val raw = if (landscape) netflixWideArt(item, watching) ?: item.image else item.image
     var poster by remember(homeRowItemKey(item)) { mutableStateOf<Painter?>(null) }
     var backdrop by remember(homeRowItemKey(item)) { mutableStateOf<Painter?>(null) }
     if (raw.isBlank()) {
         return poster ?: backdrop ?: remember { androidx.compose.ui.graphics.painter.ColorPainter(Color.Transparent) }
     }
     val request = remember(raw, width, height, density, context, landscape) {
-        val widthPx = with(density) { width.roundToPx() }.coerceAtLeast(1)
-        val heightPx = with(density) { height.roundToPx() }.coerceAtLeast(1)
+        // A wide picture is decoded for the 16:9 box covering the card, the size it has once
+        // the card expands, so a portrait card and its expanded self share one decoded image.
+        val (slotWidth, slotHeight) = if (landscape) netflixWideBox(width, height) else width to height
+        val widthPx = with(density) { slotWidth.roundToPx() }.coerceAtLeast(1)
+        val heightPx = with(density) { slotHeight.roundToPx() }.coerceAtLeast(1)
         val url = TmdbImageSizing.forSlot(raw, widthPx, heightPx,
             TmdbImageSizing.cardArtworkKind(raw, item.backdrop, landscape))
         val cacheKey = "$url|${widthPx}x$heightPx"

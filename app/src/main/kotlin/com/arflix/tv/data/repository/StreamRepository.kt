@@ -5,8 +5,11 @@ import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.arflix.tv.BuildConfig
 import com.arflix.tv.R
 import com.arflix.tv.data.api.*
 import com.arflix.tv.data.model.Addon
@@ -448,6 +451,16 @@ class StreamRepository @Inject constructor(
     // migration from older builds and old cloud payloads.
     private val sharedAddonsKey = stringPreferencesKey("shared_installed_addons_v1")
     private val sharedPendingAddonsKey = stringPreferencesKey("shared_pending_addons_v1")
+    private val addonManifestCacheKey = stringPreferencesKey("addon_manifest_cache_v1")
+    private val addonManifestVersionCodeKey = intPreferencesKey("addon_manifest_refresh_version_code")
+    private val addonManifestsRefreshedAtKey = longPreferencesKey("addon_manifests_refreshed_at")
+    private val manifestRefreshMutex = Mutex()
+    private val addonManifestAutoRefreshIntervalMs = 15 * 60_000L
+    private val addonManifestCacheType = TypeToken.getParameterized(
+        Map::class.java,
+        String::class.java,
+        AddonManifestCacheEntry::class.java
+    ).type
     private fun addonsKey() = profileManager.profileStringKey("installed_addons")
     private fun addonsKeyFor(profileId: String) = profileManager.profileStringKeyFor(profileId, "installed_addons")
     private fun pendingAddonsKey() = profileManager.profileStringKey("pending_addons")
@@ -843,9 +856,10 @@ class StreamRepository @Inject constructor(
     }
 
     suspend fun toggleAddon(addonId: String) {
+        val now = System.currentTimeMillis()
         updateAddons { current ->
             current.map { addon ->
-                if (addon.id == addonId) addon.copy(isEnabled = !addon.isEnabled) else addon
+                if (addon.id == addonId) addon.copy(isEnabled = !addon.isEnabled, setupUpdatedAt = now) else addon
             }
         }
     }
@@ -859,6 +873,7 @@ class StreamRepository @Inject constructor(
         if (normalizedUrl.isBlank()) {
             throw IllegalArgumentException(context.getString(R.string.addon_error_url_empty))
         }
+        val fetchedAt = System.currentTimeMillis()
 
         httpLocalScraperRuntime.fetchInstallCandidate(
             url = normalizedUrl,
@@ -876,7 +891,8 @@ class StreamRepository @Inject constructor(
                 url = normalizedUrl,
                 logo = candidate.logo,
                 manifest = candidate.manifest,
-                transportUrl = candidate.transportUrl
+                transportUrl = candidate.transportUrl,
+                metadataUpdatedAt = fetchedAt
             )
         }
 
@@ -901,7 +917,8 @@ class StreamRepository @Inject constructor(
                 url = normalizedUrl,
                 logo = candidate.logo,
                 manifest = candidate.manifest,
-                transportUrl = candidate.transportUrl
+                transportUrl = candidate.transportUrl,
+                metadataUpdatedAt = fetchedAt
             )
         }
 
@@ -933,7 +950,8 @@ class StreamRepository @Inject constructor(
             logo = manifest.logo,
             manifest = addonManifest,
             transportUrl = transportUrl,
-            configureUrl = configureUrl
+            configureUrl = configureUrl,
+            metadataUpdatedAt = fetchedAt
         )
     }
 
@@ -995,24 +1013,118 @@ class StreamRepository @Inject constructor(
      */
     suspend fun installPreparedAddon(addon: Addon, replaceAddonIds: Set<String> = emptySet()) =
         withContext(Dispatchers.IO) {
-            updateAddons(addedIds = setOf(addon.id), removedIds = replaceAddonIds - addon.id) { current ->
+            val now = System.currentTimeMillis()
+            val stamped = addon.copy(
+                setupUpdatedAt = addon.setupUpdatedAt.takeIf { it > 0L } ?: now,
+                metadataUpdatedAt = addon.metadataUpdatedAt.takeIf { it > 0L } ?: (if (addon.manifest != null) now else 0L)
+            )
+            updateAddons(addedIds = setOf(stamped.id), removedIds = replaceAddonIds - stamped.id) { current ->
                 val addons = current.toMutableList()
                 val replacedIndex = addons.indexOfFirst { it.id in replaceAddonIds }
-                addons.removeAll { it.id == addon.id || it.id in replaceAddonIds }
+                addons.removeAll { it.id == stamped.id || it.id in replaceAddonIds }
                 // A replacement keeps the old addon's place in the list.
-                if (replacedIndex in 0..addons.size) addons.add(replacedIndex, addon) else addons.add(addon)
+                if (replacedIndex in 0..addons.size) addons.add(replacedIndex, stamped) else addons.add(stamped)
                 addons
             }
         }
+
+    private fun readManifestCacheMap(prefs: Preferences): MutableMap<String, AddonManifestCacheEntry> {
+        val raw = prefs[addonManifestCacheKey]
+        if (raw.isNullOrBlank()) return linkedMapOf()
+        return runCatching {
+            val parsed: Map<String, AddonManifestCacheEntry>? = gson.fromJson(raw, addonManifestCacheType)
+            parsed?.toMutableMap() ?: linkedMapOf()
+        }.getOrDefault(linkedMapOf())
+    }
+
+    suspend fun getAddonMetadataCache(): Map<String, AddonManifestCacheEntry> {
+        val prefs = context.streamDataStore.data.first()
+        return readManifestCacheMap(prefs)
+    }
+
+    suspend fun mergeAddonMetadataCache(incoming: Map<String, AddonManifestCacheEntry>) {
+        if (incoming.isEmpty()) return
+        context.streamDataStore.edit { prefs ->
+            val merged = readManifestCacheMap(prefs)
+            var changed = false
+            for ((rawKey, entry) in incoming) {
+                val key = normalizeAddonUrlKey(rawKey).ifBlank { rawKey }
+                val existing = merged[key]
+                if (existing == null || entry.updatedAt > existing.updatedAt) {
+                    val combinedManifest = mergeAddonManifests(
+                        stored = existing?.manifest,
+                        incoming = entry.manifest,
+                        storedMetadataUpdatedAt = existing?.updatedAt ?: 0L,
+                        incomingMetadataUpdatedAt = entry.updatedAt,
+                        preferIncomingOnTie = true
+                    ) ?: continue
+                    merged[key] = AddonManifestCacheEntry(
+                        manifest = combinedManifest,
+                        updatedAt = maxOf(existing?.updatedAt ?: 0L, entry.updatedAt)
+                    )
+                    changed = true
+                }
+            }
+            if (changed) {
+                prefs[addonManifestCacheKey] = gson.toJson(merged)
+            }
+        }
+    }
+
+    private fun isCustomRefreshableAddon(addon: Addon): Boolean {
+        return addon.isInstalled &&
+            addon.runtimeKind == RuntimeKind.STREMIO &&
+            defaultAddons.none { it.id == addon.id } &&
+            !addon.url.isNullOrBlank()
+    }
+
+    /**
+     * True when the app version upgraded or any installed custom addon is missing
+     * local manifest metadata (e.g. restored from a legacy cloud snapshot).
+     */
+    suspend fun needsImmediateAddonManifestRefresh(): Boolean {
+        val prefs = context.streamDataStore.data.first()
+        val addons = readSharedOrLegacyAddons(prefs).orEmpty().filter(::isCustomRefreshableAddon)
+        if (addons.isEmpty()) return false
+        if (prefs[addonManifestVersionCodeKey] != BuildConfig.VERSION_CODE) return true
+        return addons.any { it.manifest == null || it.metadataUpdatedAt <= 0L }
+    }
+
+    /**
+     * Refreshes installed custom addon manifests when the app version changes, metadata
+     * is missing/incomplete, or the background TTL has elapsed.
+     */
+    suspend fun refreshInstalledAddonsIfNeeded(force: Boolean = false): AddonRefreshReport? = withContext(Dispatchers.IO) {
+        manifestRefreshMutex.withLock {
+            val prefs = context.streamDataStore.data.first()
+            val addons = readSharedOrLegacyAddons(prefs).orEmpty().filter(::isCustomRefreshableAddon)
+            if (addons.isEmpty()) return@withLock null
+
+            val versionMismatch = prefs[addonManifestVersionCodeKey] != BuildConfig.VERSION_CODE
+            val missingMetadata = addons.any { it.manifest == null || it.metadataUpdatedAt <= 0L }
+            val lastRefreshed = prefs[addonManifestsRefreshedAtKey] ?: 0L
+            val ttlExpired = System.currentTimeMillis() - lastRefreshed > addonManifestAutoRefreshIntervalMs
+            if (!force && !versionMismatch && !missingMetadata && !ttlExpired) return@withLock null
+            // A failed legacy manifest must not restart a refresh on every Home reload.
+            if (!force && System.currentTimeMillis() - lastRefreshed in 0L until 60_000L) return@withLock null
+
+            refreshInstalledAddonsLocked()
+        }
+    }
 
     /**
      * Refresh all installed custom addons by re-fetching manifests, invalidating stream caches,
      * and returning a refresh report.
      */
     suspend fun refreshInstalledAddons(): AddonRefreshReport = withContext(Dispatchers.IO) {
+        manifestRefreshMutex.withLock { refreshInstalledAddonsLocked() }
+    }
+
+    private suspend fun refreshInstalledAddonsLocked(): AddonRefreshReport {
         val currentAddons = installedAddons.first()
         var refreshedCount = 0
         var failedCount = 0
+        val now = System.currentTimeMillis()
 
         val updatedAddons = currentAddons.map { oldAddon ->
             val isRefreshable = oldAddon.isInstalled &&
@@ -1023,19 +1135,25 @@ class StreamRepository @Inject constructor(
                 oldAddon
             } else {
                 try {
-                    val hydrated = hydrateCustomAddon(
-                        url = addonUrl,
-                        customName = oldAddon.name,
-                        probeParentConfigurePage = oldAddon.configureUrl == null
-                    )
+                    val hydrated = withTimeoutOrNull(6_000L) {
+                        hydrateCustomAddon(
+                            url = addonUrl,
+                            customName = oldAddon.name,
+                            probeParentConfigurePage = oldAddon.configureUrl == null
+                        )
+                    } ?: throw java.io.IOException("Addon manifest refresh timed out")
                     refreshedCount++
                     hydrated.copy(
                         id = oldAddon.id,
+                        url = oldAddon.url,
+                        transportUrl = hydrated.transportUrl ?: oldAddon.transportUrl,
                         configureUrl = hydrated.configureUrl ?: oldAddon.configureUrl,
                         isEnabled = oldAddon.isEnabled,
                         isInstalled = oldAddon.isInstalled,
                         runtimeKind = oldAddon.runtimeKind,
-                        installSource = oldAddon.installSource
+                        installSource = oldAddon.installSource,
+                        setupUpdatedAt = oldAddon.setupUpdatedAt,
+                        metadataUpdatedAt = now
                     )
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -1048,10 +1166,25 @@ class StreamRepository @Inject constructor(
 
         val originalsById = currentAddons.associateBy { it.id }
         val refreshedById = updatedAddons.associateBy { it.id }
-        updateAddons { latest ->
-            // A slow refresh must not undo an install, removal or toggle made while fetching.
+        updateAddons(stampChange = false) { latest ->
+            // A slow refresh must not undo an install, removal or toggle made while fetching,
+            // while still letting refreshed manifest metadata land on concurrently toggled entries.
             latest.map { addon ->
-                if (addon == originalsById[addon.id]) refreshedById[addon.id] ?: addon else addon
+                val refreshed = refreshedById[addon.id] ?: return@map addon
+                if (addon.url != originalsById[addon.id]?.url || refreshed.metadataUpdatedAt < addon.metadataUpdatedAt) return@map addon
+                if (addon == originalsById[addon.id]) {
+                    refreshed
+                } else {
+                    addon.copy(
+                        version = refreshed.version.ifBlank { addon.version },
+                        description = refreshed.description.ifBlank { addon.description },
+                        logo = refreshed.logo ?: addon.logo,
+                        manifest = mergeAddonManifests(addon.manifest, refreshed.manifest,
+                            addon.metadataUpdatedAt, refreshed.metadataUpdatedAt, preferIncomingOnTie = false),
+                        configureUrl = refreshed.configureUrl ?: addon.configureUrl,
+                        metadataUpdatedAt = maxOf(addon.metadataUpdatedAt, refreshed.metadataUpdatedAt)
+                    )
+                }
             }
         }
 
@@ -1067,10 +1200,22 @@ class StreamRepository @Inject constructor(
             val bundleKey = streamResultCacheBundleKey(activeProfileId)
             context.streamDataStore.edit { prefs ->
                 prefs.remove(bundleKey)
+                val cacheMap = readManifestCacheMap(prefs)
+                for (addon in updatedAddons) {
+                    val manifest = addon.manifest ?: continue
+                    val key = normalizeAddonUrlKey(addon.url).ifBlank { addon.id }
+                    val cached = cacheMap[key]
+                    if (key.isNotBlank() && addon.metadataUpdatedAt > 0L && (cached == null || addon.metadataUpdatedAt > cached.updatedAt)) {
+                        cacheMap[key] = AddonManifestCacheEntry(manifest, addon.metadataUpdatedAt)
+                    }
+                }
+                prefs[addonManifestCacheKey] = gson.toJson(cacheMap)
+                prefs[addonManifestVersionCodeKey] = BuildConfig.VERSION_CODE
+                prefs[addonManifestsRefreshedAtKey] = now
             }
         }
 
-        AddonRefreshReport(refreshed = refreshedCount, failed = failedCount)
+        return AddonRefreshReport(refreshed = refreshedCount, failed = failedCount)
     }
 
     private suspend fun installHttpLocalScraperCandidate(
@@ -1217,7 +1362,9 @@ class StreamRepository @Inject constructor(
                         isRequired = extra.isRequired ?: false,
                         options = extra.options
                     )
-                }
+                },
+                clientDelegate = catalog.clientDelegate,
+                clientFilter = catalog.clientFilter
             )
         } ?: emptyList()
 
@@ -1332,18 +1479,47 @@ class StreamRepository @Inject constructor(
 
     suspend fun applyAddonCloudState(addons: List<Addon>, updatedAt: Long, changes: Map<String, AddonChange>?) {
         context.streamDataStore.edit { prefs ->
-            val local = addonCloudState(prefs)
+            val manifestCache = readManifestCacheMap(prefs)
+            val enrichFromCache: (List<Addon>) -> List<Addon> = { list ->
+                list.map { addon ->
+                    val cacheKey = normalizeAddonUrlKey(addon.url).ifBlank { addon.id }
+                    val cached = manifestCache[cacheKey] ?: manifestCache[addon.id]
+                    if (cached != null) enrichAddonWithMetadata(addon, cached.manifest, cached.updatedAt) else addon
+                }
+            }
+            val local = addonCloudState(prefs).let { it.copy(addons = enrichFromCache(it.addons)) }
+            val enrichedIncoming = enrichFromCache(addons)
             val resolved = if (changes != null) {
-                reconcileExplicitAddonState(local, AddonCloudState(addons, updatedAt, changes))
+                reconcileExplicitAddonState(local, AddonCloudState(enrichedIncoming, updatedAt, changes))
             } else {
-                val legacy = reconcileAddonsWithCloud(addons, local.addons, updatedAt, local.updatedAt).first
+                val localById = local.addons.associateBy { it.id }
+                val legacy = reconcileAddonsWithCloud(enrichedIncoming, local.addons, updatedAt, local.updatedAt).first
+                    .map { addon ->
+                        val prev = localById[addon.id]
+                        if (prev != null) mergeAddonPreservingSetupAndMetadata(prev, addon,
+                            preferIncomingOnTie = updatedAt >= local.updatedAt,
+                            storedUpdatedAt = local.updatedAt, incomingUpdatedAt = updatedAt)
+                        else addon
+                    }
                 local.copy(addons = legacy.filterNot { local.changes[it.id]?.removed == true },
                     updatedAt = maxOf(local.updatedAt, updatedAt))
             }
-            prefs[sharedAddonsKey] = gson.toJson(enforceOpenSubtitles(resolved.addons).filterNot(::isIncompleteExternalAddon))
+            val persistedAddons = enforceOpenSubtitles(resolved.addons).filterNot(::isIncompleteExternalAddon)
+            prefs[sharedAddonsKey] = gson.toJson(persistedAddons)
             prefs.remove(sharedPendingAddonsKey)
             prefs[addonChangesKey] = gson.toJson(resolved.changes)
             prefs[addonsUpdatedAtKey] = resolved.updatedAt
+            var cacheChanged = false
+            for (addon in persistedAddons) {
+                val manifest = addon.manifest ?: continue
+                val key = normalizeAddonUrlKey(addon.url).ifBlank { addon.id }
+                val existing = manifestCache[key]
+                if (key.isNotBlank() && (existing == null || addon.metadataUpdatedAt > existing.updatedAt)) {
+                    manifestCache[key] = AddonManifestCacheEntry(manifest, addon.metadataUpdatedAt)
+                    cacheChanged = true
+                }
+            }
+            if (cacheChanged) prefs[addonManifestCacheKey] = gson.toJson(manifestCache)
         }
         synchronized(streamResultCache) { streamResultCache.clear() }
         invalidationBus.markDirty(CloudSyncScope.ADDONS, profileManager.getProfileIdSync(), "apply addon cloud state")
@@ -1468,7 +1644,10 @@ class StreamRepository @Inject constructor(
                     url = payload.url,
                     logo = payload.logo,
                     manifest = payload.manifest,
-                    transportUrl = payload.transportUrl
+                    transportUrl = payload.transportUrl,
+                    configureUrl = payload.configureUrl,
+                    setupUpdatedAt = payload.setupUpdatedAt ?: 0L,
+                    metadataUpdatedAt = payload.metadataUpdatedAt ?: 0L
                 )
             }.fold(LinkedHashMap<String, Addon>()) { acc, addon ->
                 acc[addon.id] = addon
@@ -3181,7 +3360,7 @@ class StreamRepository @Inject constructor(
         originalTitle: String? = null,
         providerId: String? = null
     ): List<StreamSource> = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(timeoutMs.coerceIn(500L, 90_000L)) {
+        val sources = withTimeoutOrNull(timeoutMs.coerceIn(500L, 90_000L)) {
             runCatching {
                 iptvRepository.findMovieVodSources(
                     title = title,
@@ -3203,6 +3382,7 @@ class StreamRepository @Inject constructor(
                 )
             }.getOrDefault(emptyList())
         }.orEmpty()
+        applyQualityRegexFilters(sources)
     }
 
     /** Hands messages an addon sent instead of sources to the running search's [AddonNoticeSink]. */
@@ -3222,6 +3402,7 @@ class StreamRepository @Inject constructor(
 
         return filtered
             .map { stream ->
+                addonYouTubeStream(stream, addon)?.let { return@map it }
                 val rawStreamUrl = stream.getStreamUrl()
                 val streamUrl = when {
                     !rawStreamUrl.isNullOrBlank() -> rawStreamUrl
@@ -3305,7 +3486,30 @@ class StreamRepository @Inject constructor(
             }
     }
 
+    /**
+     * A stream an addon offers as a YouTube video — Stremio's `ytId`, or a youtube.com / youtu.be
+     * link — played through ARVIO's own YouTube player, like a video of the YouTube row (an
+     * addon with a broadcaster's episodes that are only on YouTube, say). Without this the
+     * watch page itself was handed to the player, which can't play a web page. Sideload builds
+     * only, like the rest of YouTube playback from search and sources.
+     */
+    private fun addonYouTubeStream(stream: StremioStream, addon: Addon): StreamSource? {
+        if (!BuildConfig.YOUTUBE_SEARCH_AVAILABLE) return null
+        val videoId = YouTubeCollection.videoIdOfAddonStream(stream.ytId, stream.getStreamUrl()) ?: return null
+        val label = listOfNotNull(stream.name, stream.title)
+            .map { it.trim() }.firstOrNull { it.isNotBlank() }
+        return YouTubeCollection.stream(videoId).copy(
+            source = label ?: YouTubeCollection.ADDON_NAME,
+            addonName = "${addon.name} - ${YouTubeCollection.ADDON_NAME}",
+            description = stream.description?.trim()?.takeIf { it.isNotBlank() }
+        )
+    }
+
     private fun isSupportedPlaybackCandidate(stream: StremioStream): Boolean {
+        // A YouTube video is played through the YouTube player (see addonYouTubeStream).
+        if (BuildConfig.YOUTUBE_SEARCH_AVAILABLE && stream.getStreamUrl()?.let(YouTubeCollection::videoIdFromUrl) != null) {
+            return true
+        }
         val url = stream.getStreamUrl()?.trim().orEmpty()
         if (url.isBlank()) return true
 
@@ -3786,7 +3990,7 @@ class StreamRepository @Inject constructor(
         originalTitle: String? = null,
         providerId: String? = null
     ): List<StreamSource> = withContext(Dispatchers.IO) {
-        withPartialVodResults(timeoutMs.coerceIn(500L, 90_000L)) { onSources ->
+        val sources = withPartialVodResults(timeoutMs.coerceIn(500L, 90_000L)) { onSources ->
             runCatching {
                 iptvRepository.findEpisodeVodSources(
                     title = title,
@@ -3813,6 +4017,8 @@ class StreamRepository @Inject constructor(
                 )
             }.getOrThrow()
         }
+        // Filter after the timeout helper so retained partial results follow the same rules.
+        applyQualityRegexFilters(sources)
     }
 
     suspend fun prefetchEpisodeVod(
@@ -4391,14 +4597,33 @@ class StreamRepository @Inject constructor(
         return textContainsAny(descriptor, SIDE_EFFECT_PRONE_PREWARM_TEXT_MARKERS)
     }
 
-    fun canPrewarmWithoutSideEffects(stream: StreamSource): Boolean {
+    /** The one warm-up gate: an IPTV VOD row also needs the user's explicit No limit, because any request can spend the account's allowance. */
+    suspend fun canPrewarmWithoutSideEffects(stream: StreamSource): Boolean {
         val rawUrl = stream.url?.trim().orEmpty()
         if (rawUrl.isBlank()) return false
         if (rawUrl.startsWith("magnet:", ignoreCase = true)) return false
         if (!rawUrl.startsWith("http://", ignoreCase = true) && !rawUrl.startsWith("https://", ignoreCase = true)) {
             return false
         }
-        return !isSideEffectPronePrewarmSource(rawUrl, stream)
+        if (isSideEffectPronePrewarmSource(rawUrl, stream)) return false
+        if (!IptvVodSourceIds.isIptvVodAddonId(stream.addonId)) return true
+        return try {
+            iptvRepository.isExplicitlyUnlimited(stream)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            false
+        }
+    }
+
+    internal suspend fun iptvStreamPolicyFor(stream: StreamSource): IptvStreamPolicy? =
+        iptvRepository.streamPolicyFor(stream)
+
+    internal suspend fun iptvAccountUsage(account: com.arflix.tv.network.IptvProviderAccount): com.arflix.tv.network.IptvAccountUsage? =
+        iptvRepository.fetchAccountUsage(account)
+
+    /** Never waits: playback must not depend on the answer. */
+    internal fun bootstrapIptvAllowance(stream: StreamSource) {
+        stream.iptvSourceId?.let { iptvRepository.bootstrapAccountAllowance(it) }
     }
 
     private suspend fun warmHttpConnection(stream: StreamSource) {
@@ -4552,10 +4777,14 @@ class StreamRepository @Inject constructor(
         limit: Int = 3,
         allowNetworkWarmup: Boolean = true
     ) = withContext(Dispatchers.IO) {
-        streams.asSequence()
-            .filter { !it.url.isNullOrBlank() }
-            .filter { canPrewarmWithoutSideEffects(it) }
-            .take(limit.coerceAtLeast(0))
+        // Stops at the limit: the gate can read stored settings, so rows past it must not pay for that.
+        val wanted = limit.coerceAtLeast(0)
+        val warmable = ArrayList<StreamSource>(wanted)
+        for (stream in streams) {
+            if (warmable.size >= wanted) break
+            if (!stream.url.isNullOrBlank() && canPrewarmWithoutSideEffects(stream)) warmable.add(stream)
+        }
+        warmable
             .map { stream ->
                 async {
                     runCatching {
@@ -4563,7 +4792,6 @@ class StreamRepository @Inject constructor(
                     }
                 }
             }
-            .toList()
             .awaitAll()
     }
 
@@ -4587,7 +4815,10 @@ class StreamRepository @Inject constructor(
             val playable = direct.startsWith("http://", ignoreCase = true) ||
                 direct.startsWith("https://", ignoreCase = true)
             if (!playable) return null
-            return stream.copy(url = direct)
+            return stream.copy(
+                url = direct,
+                iptvSourceId = stream.iptvSourceId ?: StalkerVodLink.parseMarker(url)?.portalId
+            )
         }
 
         val normalizedUrl = when {
@@ -5220,13 +5451,7 @@ class StreamRepository @Inject constructor(
 
         // Use precompiled regexes from cache (no DataStore reads, no recompilation)
         return streams.filter { stream ->
-            val qualityText = buildString {
-                append(stream.quality)
-                if (stream.source.isNotBlank()) {
-                    append(' ')
-                    append(stream.source)
-                }
-            }
+            val qualityText = qualityFilterText(stream)
             cachedQualityFilters.regexes.none { regex -> regex.containsMatchIn(qualityText) }
         }
     }
@@ -5257,19 +5482,22 @@ class StreamRepository @Inject constructor(
         if (compiledRegexes.isEmpty()) return streams
 
         return streams.filter { stream ->
-            val qualityText = buildString {
-                append(stream.quality)
-                if (stream.source.isNotBlank()) {
-                    append(' ')
-                    append(stream.source)
-                }
-            }
+            val qualityText = qualityFilterText(stream)
             // Check if this stream matches any exclusion filter regex
             compiledRegexes.none { regex ->
                 regex.containsMatchIn(qualityText)
             }
         }
     }
+
+private fun qualityFilterText(stream: StreamSource): String = buildString {
+    append(stream.quality)
+    if (stream.source.isNotBlank()) append(' ').append(stream.source)
+    // Xtream can label the series variant while its episode title names no quality at all.
+    if (IptvVodSourceIds.isIptvVodAddonId(stream.addonId) && !stream.rawLabel.isNullOrBlank()) {
+        append(' ').append(stream.rawLabel)
+    }
+}
 
 private object StreamRegexes {
     val MANIFEST_TYPO_REGEX = Regex("""(?i)/manifest\.json[a-z0-9_-]+(?=($|[?]))""")
@@ -5301,7 +5529,10 @@ private data class StoredAddonPayload(
     val url: String? = null,
     val logo: String? = null,
     val manifest: AddonManifest? = null,
-    val transportUrl: String? = null
+    val transportUrl: String? = null,
+    val configureUrl: String? = null,
+    val setupUpdatedAt: Long? = null,
+    val metadataUpdatedAt: Long? = null
 )
 
 /**

@@ -199,10 +199,40 @@ class CloudSyncRepository @Inject constructor(
         addonLists.flatten().forEach { addon ->
             val id = addon.id.trim()
             if (id.isNotBlank()) {
-                merged.putIfAbsent(id, addon)
+                val existing = merged[id]
+                merged[id] = if (existing == null) addon
+                else mergeAddonPreservingSetupAndMetadata(existing, addon, preferIncomingOnTie = false)
             }
         }
         return merged.values.toList()
+    }
+
+    private fun parseAddonMetadataByKey(root: JSONObject): Map<String, AddonManifestCacheEntry> {
+        val obj = root.optJSONObject("addonMetadataByKey") ?: return emptyMap()
+        val result = linkedMapOf<String, AddonManifestCacheEntry>()
+        for (rawKey in obj.keys()) {
+            val entryObj = obj.optJSONObject(rawKey) ?: continue
+            val manifestObj = entryObj.optJSONObject("manifest") ?: continue
+            val manifest = runCatching {
+                gson.fromJson(manifestObj.toString(), com.arflix.tv.data.model.AddonManifest::class.java)
+            }.getOrNull() ?: continue
+            val updatedAt = entryObj.optLong("metadataUpdatedAt", entryObj.optLong("updatedAt", 0L))
+            val key = normalizeAddonUrlKey(rawKey).ifBlank { rawKey }
+            if (key.isNotBlank()) result[key] = AddonManifestCacheEntry(manifest, updatedAt)
+        }
+        return result
+    }
+
+    private fun enrichAddonsFromCloudMetadata(
+        addons: List<Addon>,
+        metadataMap: Map<String, AddonManifestCacheEntry>
+    ): List<Addon> {
+        if (metadataMap.isEmpty()) return addons
+        return addons.map { addon ->
+            val urlKey = normalizeAddonUrlKey(addon.url)
+            val cache = metadataMap[urlKey] ?: metadataMap[addon.id] ?: metadataMap[addon.manifest?.id]
+            if (cache != null) enrichAddonWithMetadata(addon, cache.manifest, cache.updatedAt) else addon
+        }
     }
 
     /**
@@ -334,6 +364,7 @@ class CloudSyncRepository @Inject constructor(
         // Null from older clients: keep the local preference.
         val netflixHomeStyle: Boolean? = null,
         val watchlistOnHome: Boolean? = null,
+        val hiddenNavigationSections: List<String>? = null,
         val clockFormat: String = "24h",
         val guideRowCount: Int? = null,
         val showBudget: Boolean = true,
@@ -341,6 +372,8 @@ class CloudSyncRepository @Inject constructor(
         val animeEpisodeStructuring: String = AnimeStructuringStyle.BROADCAST.id,
         val iptvFavoritesOnHome: Boolean = true,
         val showLoadingStats: Boolean? = null,
+        // Older clients omit this field; do not reset an opted-in TV on restore.
+        val showAddonStreamDetails: Boolean? = null,
         val spoilerBlurEnabled: Boolean = false,
         val volumeBoostDb: Int = 0,
         val includeSpecials: Boolean = false,
@@ -357,7 +390,13 @@ class CloudSyncRepository @Inject constructor(
         val streamProvidersCustomOrder: String = "",
         val streamIntegrationsMacroOrder: String = "",
         val streamMacroEnabledMap: Map<String, Boolean> = emptyMap(),
-        val streamProviderEnabledMap: Map<String, Boolean> = emptyMap()
+        val streamProviderEnabledMap: Map<String, Boolean> = emptyMap(),
+        /**
+         * Addon catalogs a parent approved for this kids profile (KidsTrustedCatalogs). Only the
+         * approvals sync; each device records the titles they list as its catalogs load. Null
+         * from older clients, which must not clear approvals.
+         */
+        val kidsCatalogApprovals: List<String>? = null
     )
 
     // ── DataStore key helpers ──
@@ -518,7 +557,7 @@ class CloudSyncRepository @Inject constructor(
         "dnsProvider", "subtitleAiEnabled", "subtitleAiAutoSelect", "subtitleAiFindBestMatch",
         "subtitlePreloadEnabled", "dolbyVisionCompatEnabled", "subtitleAiApiKey",
         "subtitleAiModel", "subtitleRemoveHearingImpaired", "telegramSearchOnClickOnly",
-        "subtitleHearingSyncV2"
+        "subtitleHearingSyncV2", "liveAiSubsEnabled", "liveAiSubsAutoStart"
     )
     // Per-profile fields excluded from the generic merge (handled by their own logic / not values).
     private val profileMergeExclude = setOf("defaultSubtitle", "subtitleSettingsUpdatedAt")
@@ -732,6 +771,7 @@ class CloudSyncRepository @Inject constructor(
                         trailerInCards = prefs[trailerInCardsKeyFor(profile.id)] ?: false,
                         netflixHomeStyle = prefs[netflixHomeStyleKeyFor(profile.id)] ?: true,
                         watchlistOnHome = prefs[watchlistOnHomeKeyFor(profile.id)] ?: false,
+                        hiddenNavigationSections = com.arflix.tv.util.navigationSectionsForCloud(prefs, profile.id),
                         clockFormat = prefs[clockFormatKeyFor(profile.id)] ?: "24h",
                         guideRowCount = prefs[guideRowCountKeyFor(profile.id)]?.toIntOrNull()
                             ?.takeIf { it in 6..10 } ?: 0,
@@ -740,6 +780,7 @@ class CloudSyncRepository @Inject constructor(
                         animeEpisodeStructuring = prefs[animeEpisodeStructuringKeyFor(profile.id)] ?: AnimeStructuringStyle.BROADCAST.id,
                         iptvFavoritesOnHome = prefs[iptvFavoritesOnHomeKeyFor(profile.id)] ?: true,
                         showLoadingStats = prefs[showLoadingStatsKeyFor(profile.id)] ?: true,
+                        showAddonStreamDetails = prefs[com.arflix.tv.util.addonStreamDetailsKey(profile.id)] ?: false,
                         spoilerBlurEnabled = prefs[spoilerBlurKeyFor(profile.id)] ?: false,
                         volumeBoostDb = prefs[volumeBoostDbKeyFor(profile.id)]?.toIntOrNull()?.coerceIn(0, 15) ?: 0,
                         dnsProvider = prefs[dnsProviderKeyFor(profile.id)] ?: globalDnsProvider,
@@ -775,7 +816,8 @@ class CloudSyncRepository @Inject constructor(
                         streamProvidersCustomOrder = streamCloudState.customProviderOrder,
                         streamIntegrationsMacroOrder = streamCloudState.macroCategoryOrder,
                         streamMacroEnabledMap = streamCloudState.macroEnabledMap,
-                        streamProviderEnabledMap = streamCloudState.providerEnabledMap
+                        streamProviderEnabledMap = streamCloudState.providerEnabledMap,
+                        kidsCatalogApprovals = prefs[KidsTrustedCatalogs.approvalsKey(profile.id)]?.sorted()
                     )
                 )
             }
@@ -813,6 +855,9 @@ class CloudSyncRepository @Inject constructor(
         root.put("subtitleAiApiKey", prefs[subtitleAiApiKeyKey] ?: "")
         root.put("subtitleAiModel", prefs[subtitleAiModelKey] ?: "GROQ_LLAMA_70B")
         root.put("subtitleRemoveHearingImpaired", prefs[subtitleRemoveHearingImpairedKey] ?: true)
+        // Live TV AI subtitles (global, like the AI subtitle key they share).
+        root.put("liveAiSubsEnabled", prefs[com.arflix.tv.ui.screens.tv.live.aisubs.LiveAiSubsPrefs.ENABLED] ?: false)
+        root.put("liveAiSubsAutoStart", prefs[com.arflix.tv.ui.screens.tv.live.aisubs.LiveAiSubsPrefs.AUTO_START] ?: false)
         root.put(
             "telegramSearchOnClickOnly",
             prefs[com.arflix.tv.data.telegram.TelegramRepository.KEY_SEARCH_ON_CLICK_ONLY] ?: true
@@ -925,6 +970,32 @@ class CloudSyncRepository @Inject constructor(
         // pull on apply (see reconcileAddonsWithCloud).
         root.put("addonsUpdatedAt", addonState.updatedAt)
         root.put("addonChanges", JSONObject(gson.toJson(addonState.changes)))
+
+        // Separate refreshable manifest cache so older clients that omit newer manifest fields
+        // cannot overwrite cached catalogs/delegation metadata in the cloud snapshot.
+        val localManifestCache = streamRepository.getAddonMetadataCache().toMutableMap()
+        installed.forEach { addon ->
+            val manifest = addon.manifest ?: return@forEach
+            val key = normalizeAddonUrlKey(addon.url).ifBlank { addon.id }
+            if (key.isNotBlank()) {
+                val existing = localManifestCache[key]
+                if (existing == null || addon.metadataUpdatedAt >= existing.updatedAt) {
+                    localManifestCache[key] = AddonManifestCacheEntry(manifest, maxOf(existing?.updatedAt ?: 0L, addon.metadataUpdatedAt))
+                }
+            }
+        }
+        if (localManifestCache.isNotEmpty()) {
+            val metadataJson = JSONObject()
+            localManifestCache.forEach { (key, entry) ->
+                val obj = JSONObject()
+                obj.put("manifest", JSONObject(gson.toJson(entry.manifest)))
+                obj.put("catalogs", org.json.JSONArray(gson.toJson(entry.manifest.catalogs)))
+                obj.put("resources", org.json.JSONArray(gson.toJson(entry.manifest.resources)))
+                if (entry.updatedAt > 0L) obj.put("metadataUpdatedAt", entry.updatedAt)
+                metadataJson.put(key, obj)
+            }
+            root.put("addonMetadataByKey", metadataJson)
+        }
 
         // Catalogs per profile
         val catalogsByProfile = buildMap<String, List<CatalogConfig>> {
@@ -1697,6 +1768,7 @@ class CloudSyncRepository @Inject constructor(
                         prefs[trailerDelayKeyFor(profileId)] = state.trailerDelaySeconds.toString()
                         prefs[trailerInCardsKeyFor(profileId)] = state.trailerInCards
                         state.watchlistOnHome?.let { prefs[watchlistOnHomeKeyFor(profileId)] = it }
+                        com.arflix.tv.util.restoreNavigationSections(prefs, profileId, state.hiddenNavigationSections)
                         prefs[clockFormatKeyFor(profileId)] = state.clockFormat
                         // Older clients omit this field; keep the local preference in that case.
                         state.guideRowCount?.let { count ->
@@ -1708,6 +1780,7 @@ class CloudSyncRepository @Inject constructor(
                         prefs[animeEpisodeStructuringKeyFor(profileId)] = state.animeEpisodeStructuring.ifBlank { AnimeStructuringStyle.BROADCAST.id }
                         prefs[iptvFavoritesOnHomeKeyFor(profileId)] = state.iptvFavoritesOnHome
                         state.showLoadingStats?.let { prefs[showLoadingStatsKeyFor(profileId)] = it }
+                        state.showAddonStreamDetails?.let { prefs[com.arflix.tv.util.addonStreamDetailsKey(profileId)] = it }
                         prefs[spoilerBlurKeyFor(profileId)] = state.spoilerBlurEnabled
                         prefs[volumeBoostDbKeyFor(profileId)] = state.volumeBoostDb.coerceIn(0, 15).toString()
                         prefs[dnsProviderKeyFor(profileId)] = state.dnsProvider.ifBlank { "system" }
@@ -1755,6 +1828,17 @@ class CloudSyncRepository @Inject constructor(
                                 providerEnabledMap = state.streamProviderEnabledMap
                             )
                         )
+                        state.kidsCatalogApprovals?.let { approvals ->
+                            val approved = approvals.toSet()
+                            val members = KidsTrustedCatalogs.membersKey(profileId)
+                            val current = prefs[KidsTrustedCatalogs.approvalsKey(profileId)].orEmpty()
+                            prefs[KidsTrustedCatalogs.approvalsKey(profileId)] = approved
+                            // An approval removed on another device takes its titles with it here.
+                            val revoked = current - approved
+                            if (revoked.isNotEmpty()) {
+                                prefs[members] = KidsTrustedCatalogs.withoutCatalogs(prefs[members].orEmpty(), revoked)
+                            }
+                        }
                     }
                 }
             }
@@ -1883,6 +1967,10 @@ class CloudSyncRepository @Inject constructor(
                 val model = root.optString("subtitleAiModel", "GROQ_LLAMA_70B")
                 if (model.isNotBlank()) prefs[subtitleAiModelKey] = model
                 prefs[subtitleRemoveHearingImpairedKey] = root.optBoolean("subtitleRemoveHearingImpaired", true)
+                // has() guards: backups from versions without Live TV AI subtitles must not reset them.
+                val live = com.arflix.tv.ui.screens.tv.live.aisubs.LiveAiSubsPrefs
+                if (root.has("liveAiSubsEnabled")) prefs[live.ENABLED] = root.optBoolean("liveAiSubsEnabled", false)
+                if (root.has("liveAiSubsAutoStart")) prefs[live.AUTO_START] = root.optBoolean("liveAiSubsAutoStart", false)
             }
         }
         if (preservedNewerLocalSubtitle) {
@@ -1928,6 +2016,10 @@ class CloudSyncRepository @Inject constructor(
             val changes: Map<String, AddonChange>? = root.optJSONObject("addonChanges")?.let {
                 gson.fromJson(it.toString(), changeType)
             }
+            val cloudMetadataMap = parseAddonMetadataByKey(root)
+            if (cloudMetadataMap.isNotEmpty()) {
+                streamRepository.mergeAddonMetadataCache(cloudMetadataMap)
+            }
             root.optJSONObject("addonsByProfile")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
                 val type = TypeToken.getParameterized(Map::class.java, String::class.java, TypeToken.getParameterized(List::class.java, Addon::class.java).type).type
                 val map: Map<String, List<Addon>> = gson.fromJson(json, type) ?: emptyMap()
@@ -1935,14 +2027,21 @@ class CloudSyncRepository @Inject constructor(
                 val rootAddons: List<Addon> = root.optJSONArray("addons")?.let {
                     gson.fromJson(it.toString(), addonType)
                 } ?: emptyList()
-                val sharedAddons = mergeAddonsForSharedRestore(map.values + listOf(rootAddons))
+                val sharedAddons = enrichAddonsFromCloudMetadata(
+                    mergeAddonsForSharedRestore(map.values + listOf(rootAddons)),
+                    cloudMetadataMap
+                )
                 streamRepository.applyAddonCloudState(sharedAddons, cloudAddonsTs, changes)
             }
             root.optJSONArray("addons")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
                 if (!root.has("addonsByProfile")) {
                     val type = TypeToken.getParameterized(List::class.java, Addon::class.java).type
                     val addons: List<Addon> = gson.fromJson(json, type) ?: emptyList()
-                    streamRepository.applyAddonCloudState(addons, cloudAddonsTs, changes)
+                    streamRepository.applyAddonCloudState(
+                        enrichAddonsFromCloudMetadata(addons, cloudMetadataMap),
+                        cloudAddonsTs,
+                        changes
+                    )
                 }
             }
         } catch (e: Exception) {

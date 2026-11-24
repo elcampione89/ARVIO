@@ -179,6 +179,7 @@
     <string name="frame_rate_desc">Désactivé, fluide ou toujours</string>
     <string name="quality_filters_desc">Exclure des niveaux de qualité sur cet appareil</string>
     <string name="card_layout_desc">Cartes paysage ou affiche</string>
+    <string name="card_layout_netflix_exception_desc">Sans effet sur les rangées standard de l’accueil façon Netflix</string>
     <string name="ui_mode_desc">Forcer TV, tablette ou téléphone</string>
     <string name="skip_profile_desc">Charge auto. le dernier profil utilisé au redémarrage</string>
     <string name="oled_black_background_desc">Utilisez des fonds noir pur pour les écrans OLED</string>
@@ -240,7 +241,7 @@
     <string name="ai_remove_hi_title">Retirer le texte pour malentendants</string>
     <string name="ai_remove_hi_desc">Supprimez les marqueurs pour malentendants [entre crochets] avant la traduction</string>
     <string name="ai_api_key_title">Clé API</string>
-    <string name="ai_api_key_desc">Saisissez manuellement votre clé API Groq ou Gemini</string>
+    <string name="ai_api_key_desc">Saisissez manuellement votre clé API Groq, Gemini ou Claude</string>
     <string name="ai_scan_qr_title">Scanner un QR code pour définir la clé</string>
     <string name="ai_scan_qr_desc">Ouvrez un navigateur sur votre téléphone pour saisir la clé API</string>
     <string name="ai_groq_disclaimer">Offre gratuite Groq : ~30 requêtes/min</string>
@@ -253,7 +254,7 @@
     <string name="ai_api_key_dialog_subtitle_gemini">Saisissez votre clé API Gemini</string>
     <string name="ai_key_saved_title">Clé API enregistrée</string>
     <string name="ai_key_saved_subtitle">La traduction IA est prête à l’emploi</string>
-    <string name="ai_qr_scan_hint">Scannez avec votre téléphone — choisissez Groq ou Gemini</string>
+    <string name="ai_qr_scan_hint">Scannez avec votre téléphone — choisissez Groq, Gemini ou Claude</string>
     <string name="smooth_scrolling">Défilement plus fluide</string>
     <string name="smooth_scrolling_desc">Utilisez des transitions fluides premium dans les rangées d’affiches</string>
 
@@ -1139,4 +1140,15 @@
     <string name="live_menu_hide_category">Masquer la catégorie</string>
     <string name="live_menu_unhide_category">Afficher la catégorie</string>
     <string name="ratings">Notes des Épisodes</string>
+
+    <!-- Type on the phone (QR in TV text dialogs) -->
+    <string name="phone_input_button">Utiliser le téléphone</string>
+    <string name="phone_input_button_hide">Masquer le code du téléphone</string>
+    <string name="phone_input_qr_title">📱 Depuis le téléphone</string>
+    <string name="phone_input_qr_hint">Scannez pour le saisir ou le coller sur votre téléphone.</string>
+    <string name="phone_input_page_hint">Ce que vous envoyez s’affiche sur la TV. Appuyez sur OK pour l’enregistrer.</string>
+    <string name="phone_input_page_send">Envoyer à la TV</string>
+    <string name="phone_input_page_sent">Envoyé ✓ — appuyez sur OK sur la TV.</string>
+    <string name="phone_input_page_not_sent">Non envoyé</string>
+    <string name="phone_input_page_expired">Ce code a expiré — scannez à nouveau le QR code sur la TV.</string>
 </resources>

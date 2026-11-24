@@ -79,6 +79,24 @@ function androidPayload(overrides = {}) {
 const clone = (value) => structuredClone(value);
 const merge = (stored, incoming, base) => mergeWithStoredSnapshot({ payload: stored }, incoming, base);
 
+test('navigation visibility survives older clients, stale devices and profile-isolated unhide edits', () => {
+  const stored = androidPayload();
+  stored.profileSettingsById.p1.hiddenNavigationSections = ['tv'];
+  stored.profileSettingsById.p2.hiddenNavigationSections = ['search'];
+  stored.fieldUpdatedAt['p:p1:hiddenNavigationSections'] = 1000;
+  stored.fieldUpdatedAt['p:p2:hiddenNavigationSections'] = 1000;
+  const older = androidPayload();
+  assert.deepEqual(merge(stored, older).profileSettingsById.p1.hiddenNavigationSections, ['tv']);
+  const stale = clone(stored);
+  stale.profileSettingsById.p1.hiddenNavigationSections = [];
+  stale.fieldUpdatedAt['p:p1:hiddenNavigationSections'] = 500;
+  assert.deepEqual(merge(stored, stale).profileSettingsById.p1.hiddenNavigationSections, ['tv']);
+  stale.fieldUpdatedAt['p:p1:hiddenNavigationSections'] = 2000;
+  const next = merge(stored, stale);
+  assert.deepEqual(next.profileSettingsById.p1.hiddenNavigationSections, []);
+  assert.deepEqual(next.profileSettingsById.p2.hiddenNavigationSections, ['search']);
+});
+
 test("a web edit and a concurrent Android edit of different fields both survive", () => {
   const read = androidPayload({ fieldUpdatedAt: { "p:p1:autoPlayNext": 100, "p:p1:subtitleSize": 100 } });
   // Android changes autoPlayNext after the web read the document...
@@ -185,6 +203,44 @@ test("catalog lists merge by c: timestamps, including deliberately empty lists",
   const result = merge(stored, web);
   assert.deepEqual(result.catalogsByProfile.p1, [{ id: "android-new" }]);
   assert.deepEqual(result.hiddenAddonByProfile.p1, []);
+});
+
+test("older client catalogsByProfile push preserves omitted clientDelegate, clientFilter, and addonMetadataByKey", () => {
+  const stored = androidPayload({
+    fieldUpdatedAt: { "c:p1:catalogsByProfile": 200 },
+    addonMetadataByKey: {
+      "https://addon.example/p/p1": {
+        metadataUpdatedAt: 500,
+        catalogs: [{ id: "vod-recent", type: "movie", clientDelegate: "vod:recent?type=movie" }]
+      }
+    }
+  });
+  stored.catalogsByProfile.p1 = [{
+    id: "addon_1",
+    title: "VOD Recent",
+    sourceType: "ADDON",
+    addonId: "tv.arvio.discover_abc",
+    addonCatalogId: "vod-recent",
+    addonCatalogType: "movie",
+    clientDelegate: "vod:recent?type=movie",
+    clientFilter: "{\"minYear\":2022}"
+  }];
+
+  const legacyMobile = androidPayload({ fieldUpdatedAt: { "c:p1:catalogsByProfile": 400 } });
+  legacyMobile.catalogsByProfile.p1 = [{
+    id: "addon_1",
+    title: "VOD Recent Reordered",
+    sourceType: "ADDON",
+    addonId: "tv.arvio.discover_abc",
+    addonCatalogId: "vod-recent",
+    addonCatalogType: "movie"
+  }];
+
+  const result = merge(stored, legacyMobile);
+  assert.equal(result.catalogsByProfile.p1[0].title, "VOD Recent Reordered");
+  assert.equal(result.catalogsByProfile.p1[0].clientDelegate, "vod:recent?type=movie");
+  assert.equal(result.catalogsByProfile.p1[0].clientFilter, "{\"minYear\":2022}");
+  assert.equal(result.addonMetadataByKey["https://addon.example/p/p1"].metadataUpdatedAt, 500);
 });
 
 test("a deleted profile stays deleted when a stale device still pushes it", () => {

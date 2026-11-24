@@ -823,8 +823,8 @@ const localeKeys = ["pt", "es", ...extraLocaleKeys];
 const premiumRoutesFile = path.join(siteRoot, "premium/localized-routes.json");
 const premiumRoutes = fs.existsSync(premiumRoutesFile) ? JSON.parse(fs.readFileSync(premiumRoutesFile, "utf8")) : [];
 
-const privacyLabels = { pt: "Privacidade", es: "Privacidad", de: "Datenschutz", fr: "Confidentialité", nl: "Privacy", it: "Privacy", sv: "Integritet", da: "Privatliv", nb: "Personvern", fi: "Tietosuoja", hi: "गोपनीयता" };
-const languageNames = { pt: "Português (Brasil)", es: "Español", de: "Deutsch", fr: "Français", nl: "Nederlands", it: "Italiano", sv: "Svenska", da: "Dansk", nb: "Norsk", fi: "Suomi", hi: "हिन्दी" };
+const privacyLabels = { pt: "Privacidade", es: "Privacidad", de: "Datenschutz", fr: "Confidentialité", nl: "Privacy", it: "Privacy", sv: "Integritet", da: "Privatliv", nb: "Personvern", fi: "Tietosuoja", hi: "गोपनीयता", he: "פרטיות" };
+const languageNames = { pt: "Português (Brasil)", es: "Español", de: "Deutsch", fr: "Français", nl: "Nederlands", it: "Italiano", sv: "Svenska", da: "Dansk", nb: "Norsk", fi: "Suomi", hi: "हिन्दी", he: "עברית" };
 
 function absolute(urlPath) {
   return `${baseUrl}${urlPath}`;
@@ -910,7 +910,7 @@ function renderFeaturePage(localeKey, key) {
   const premiumPage = premiumRoutes.find((route) => route === `${pageMap.home[localeKey]}premium/`);
   const primaryHref = key === "web" && premiumPage ? premiumPage : page.ctaPrimaryHref || playUrl;
   return `<!DOCTYPE html>
-<html lang="${locale.htmlLang}">
+<html lang="${locale.htmlLang}"${locale.dir ? ` dir="${locale.dir}"` : ""}>
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${page.title}</title>
@@ -966,14 +966,18 @@ function renderDirectory(localeKey, isHome = false) {
   const heroAlt = localeKey === "pt" ? "Interface do ARVIO em uma televisão" : localeKey === "es" ? "Interfaz de ARVIO en un televisor" : `ARVIO — ${copy.eyebrow}`;
   // Homepages of the new languages also lead to the Premium page in that language.
   const premiumHome = isHome && extraLocaleKeys.includes(localeKey) && premiumRoutes.includes(`${route}premium/`)
-    ? `<a class="button secondary" href="${route}premium/">${locale.browser}</a>` : "";
-  const intro = isHome ? `<section class="hero"><img class="hero-media" src="/assets/${images.home}" alt="${heroAlt}"><div class="hero-shade" aria-hidden="true"></div><div class="hero-content"><nav class="breadcrumb" aria-label="${locale.breadcrumb}"><span>ARVIO</span></nav><p class="eyebrow">${copy.eyebrow}</p><h1>${copy.h1}</h1><p class="hero-copy">${copy.lead}</p><div class="actions"><a class="button" href="${playUrl}">${locale.install}</a><a class="button secondary" href="${pageMap.guides[localeKey]}">${copy.guidesButton}</a>${premiumHome}</div></div></section>` : `<section class="guide-intro"><div class="shell"><nav class="breadcrumb" aria-label="${locale.breadcrumb}"><a href="${pageMap.home[localeKey]}">ARVIO</a><span aria-hidden="true">/</span><span>${locale.guides}</span></nav><p class="eyebrow">${copy.eyebrow}</p><h1>${copy.h1}</h1><p class="lead">${copy.lead}</p></div></section>`;
+    ? `<a class="button secondary hero-web" href="${route}premium/" data-premium-placement="hero-membership">${locale.browser}</a>` : "";
+  // iPhone, iPad, Mac and Windows visitors can't use the Android app: lead with
+  // ARVIO Web and its price there. Android, TV and unknown devices keep the
+  // free app first (same rule as the English homepage).
+  const deviceHero = premiumHome && locale.priceNote ? `<p class="hero-price-note" data-premium-pricing-home data-device-price-summary hidden>${locale.priceNote}</p><script>(function(){var n=navigator,u=n.userAgent||'',p=(n.userAgentData&&n.userAgentData.platform)||n.platform||'';if(/Android/i.test(u+' '+p))return;if(!(/iPhone|iPod|iPad/.test(u)||(/Macintosh/.test(u)&&n.maxTouchPoints>1)||/Macintosh|Mac OS X|Windows/.test(u)||/^(mac|win)/i.test(p)))return;var a=document.getElementById('hero-actions'),apk=a&&a.querySelector('.hero-apk'),web=a&&a.querySelector('.hero-web');if(!apk||!web)return;a.insertBefore(web,apk);web.classList.remove('secondary');apk.classList.add('secondary');var note=document.querySelector('.hero-price-note');if(note)note.hidden=false;var play=document.querySelector('.site-header .play-link');if(play){play.href=web.getAttribute('href');play.textContent=web.textContent;}})();</script>` : "";
+  const intro = isHome ? `<section class="hero"><img class="hero-media" src="/assets/${images.home}" alt="${heroAlt}"><div class="hero-shade" aria-hidden="true"></div><div class="hero-content"><nav class="breadcrumb" aria-label="${locale.breadcrumb}"><span>ARVIO</span></nav><p class="eyebrow">${copy.eyebrow}</p><h1>${copy.h1}</h1><p class="hero-copy">${copy.lead}</p><div class="actions"${premiumHome ? ' id="hero-actions"' : ""}><a class="button${premiumHome ? " hero-apk" : ""}" href="${playUrl}">${locale.install}</a><a class="button secondary" href="${pageMap.guides[localeKey]}">${copy.guidesButton}</a>${premiumHome}</div>${deviceHero}</div></section>` : `<section class="guide-intro"><div class="shell"><nav class="breadcrumb" aria-label="${locale.breadcrumb}"><a href="${pageMap.home[localeKey]}">ARVIO</a><span aria-hidden="true">/</span><span>${locale.guides}</span></nav><p class="eyebrow">${copy.eyebrow}</p><h1>${copy.h1}</h1><p class="lead">${copy.lead}</p></div></section>`;
   const sectionHeading = isHome ? `<div class="section-head"><h2>${copy.sectionTitle}</h2><p>${copy.sectionCopy}</p></div>` : "";
   const noteTitle = isHome ? locale.softwareBoundaryTitle : copy.noteTitle;
   const ctaTitle = isHome ? copy.freeTitle : copy.ctaTitle;
   const ctaCopy = isHome ? copy.freeCopy : copy.ctaCopy;
   return `<!DOCTYPE html>
-<html lang="${locale.htmlLang}">
+<html lang="${locale.htmlLang}"${locale.dir ? ` dir="${locale.dir}"` : ""}>
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${copy.title}</title>
@@ -984,7 +988,7 @@ function renderDirectory(localeKey, isHome = false) {
   <meta property="og:type" content="website"><meta property="og:site_name" content="ARVIO"><meta property="og:locale" content="${ogLocales[localeKey]}"><meta property="og:title" content="${copy.title}"><meta property="og:description" content="${copy.description}"><meta property="og:url" content="${absolute(route)}"><meta property="og:image" content="${baseUrl}/assets/arvio-social.webp">
   <meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${copy.title}"><meta name="twitter:description" content="${copy.description}"><meta name="twitter:image" content="${baseUrl}/assets/arvio-social.webp">
   <script type="application/ld+json">${json}</script>
-  <script defer src="/assets/premium-journey.js?v=2"></script>
+  <script defer src="/assets/premium-journey.js?v=2"></script>${premiumHome ? '\n  <script defer src="/assets/premium-pricing.js?v=1"></script>' : ""}
 </head>
 <body>
   ${header(localeKey, key)}

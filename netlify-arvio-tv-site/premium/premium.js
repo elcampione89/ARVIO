@@ -23,6 +23,10 @@
     const base = value.split('-')[0].replace(/^nb$/, 'no');
     return Object.keys(languages).find(k => k.split('-')[0] === base);
   }
+
+  const pricing = globalThis.ARVIOPremiumPricing;
+  let regional = false;
+
   function render(code) {
     const copy = languages[code];
     document.documentElement.lang = code;
@@ -32,7 +36,9 @@
     for (const element of document.querySelectorAll('[data-copy]')) if (copy[element.dataset.copy]) element.textContent = copy[element.dataset.copy];
     for (const [index, key] of ['tv','library','server','sports'].entries()) document.querySelectorAll('.gallery img')[index].alt = 'ARVIO Web — ' + copy[key];
     document.title = 'ARVIO Premium — ' + copy.headline;
+    if (pricing) pricing.apply(copy, regional);
   }
+
   // A localized page (/de/premium/ ...) opens in its own language; the English page follows the browser.
   const initial = match(new URL(location.href).searchParams.get('lang')) || match(document.documentElement.dataset?.pageLang) || (navigator.languages || [navigator.language]).map(match).find(Boolean) || 'en-US';
   render(initial);
@@ -42,4 +48,9 @@
     url.searchParams.set('lang', select.value);
     history.replaceState(null, '', url);
   });
+  // Translate immediately; an optional country lookup must not hold up the page.
+  if (pricing) {
+    regional = pricing.regionalCountry(await pricing.loadCountry());
+    pricing.apply(languages[select.value] || languages[initial], regional);
+  }
 })().catch(() => { /* English content remains usable when translations are unavailable. */ });

@@ -963,6 +963,18 @@
     <string name="iptv_account_refresh">Jetzt aktualisieren</string>
     <string name="iptv_account_refreshing">Wird abgefragt…</string>
     <string name="iptv_account_refresh_failed">Der Anbieter hat nicht geantwortet. Bitte in einer Minute noch einmal versuchen.</string>
+    <string name="iptv_connection_limit_title">Verbindungslimit auf diesem Gerät</string>
+    <string name="iptv_connection_limit_auto">Auto</string>
+    <string name="iptv_connection_limit_no_limit">Kein Limit</string>
+    <string name="iptv_connection_limit_at_a_time">%1$d gleichzeitig</string>
+    <string name="iptv_connection_limit_with_effective">%1$s (%2$d gleichzeitig)</string>
+    <string name="iptv_provider_allowance">Vom Anbieter erlaubt: %1$s</string>
+    <string name="iptv_provider_allowance_not_reported">Vom Anbieter erlaubt: nicht angegeben</string>
+    <string name="iptv_account_busy_title">Dieses Konto ist ausgelastet</string>
+    <string name="iptv_account_busy_live_detail">Der Anbieter meldet %1$d von %2$d Streams in Benutzung.</string>
+    <string name="iptv_account_busy_vod">Der Anbieter meldet, dass alle Streams dieses Kontos in Benutzung sind. Beende einen anderen Stream und versuche es erneut.</string>
+    <string name="iptv_account_busy_dismissed_hint">Drücke OK, um es erneut zu versuchen.</string>
+    <string name="iptv_account_play_anyway">Trotzdem abspielen</string>
     <string name="settings_section_stalker_portals">STALKER-PORTALE</string>
     <string name="settings_stalker_add_hint">Bis zu 10 Stalker-/Ministra-Portale hinzufügen</string>
     <string name="settings_stalker_create_another">Weiteres Stalker-Portal hinzufügen</string>
@@ -1203,6 +1215,7 @@
     <string name="frame_rate_desc">Aus, Nahtlos oder Immer</string>
     <string name="quality_filters_desc">Qualitätsstufen auf diesem Gerät ausschließen</string>
     <string name="card_layout_desc">Querformat- oder Poster-Karten</string>
+    <string name="card_layout_netflix_exception_desc">Gilt nicht für normale Reihen auf der Netflix-Startseite</string>
     <string name="ui_mode_desc">TV, Tablet oder Telefon erzwingen</string>
     <string name="skip_profile_desc">Zuletzt genutztes Profil nach Neustart automatisch laden</string>
     <string name="oled_black_background_desc">Rein schwarze App-Hintergründe für OLED-Bildschirme nutzen</string>
@@ -1268,7 +1281,7 @@
     <string name="ai_remove_hi_title">Hörgeschädigten-Text entfernen</string>
     <string name="ai_remove_hi_desc">[Geklammerte] Hörgeschädigten-Kennzeichnungen vor der Übersetzung entfernen</string>
     <string name="ai_api_key_title">API-Schlüssel</string>
-    <string name="ai_api_key_desc">Groq- oder Gemini-API-Schlüssel manuell eingeben</string>
+    <string name="ai_api_key_desc">Groq-, Gemini- oder Claude-API-Schlüssel manuell eingeben</string>
     <string name="ai_scan_qr_title">QR-Code scannen zum Setzen des Schlüssels</string>
     <string name="ai_scan_qr_desc">Browser auf dem Telefon öffnen, um den API-Schlüssel einzugeben</string>
     <string name="ai_groq_disclaimer">Groq Gratis-Tarif: ~30 Anfragen/Min_</string>
@@ -1281,7 +1294,7 @@
     <string name="ai_api_key_dialog_subtitle_gemini">Gemini-API-Schlüssel eingeben</string>
     <string name="ai_key_saved_title">API-Schlüssel gespeichert</string>
     <string name="ai_key_saved_subtitle">KI-Übersetzung ist einsatzbereit</string>
-    <string name="ai_qr_scan_hint">Mit dem Telefon scannen — Groq oder Gemini wählen</string>
+    <string name="ai_qr_scan_hint">Mit dem Telefon scannen — Groq, Gemini oder Claude wählen</string>
     <string name="smooth_scrolling">Sanfteres Scrollen</string>
     <string name="smooth_scrolling_desc">Premium sanfte Übergänge beim Navigieren in Poster-Reihen nutzen</string>
     <string name="plugin_providers_count">%1$d Anbieter</string>
@@ -1906,4 +1919,33 @@
     <string name="discord_qr_instructions">1. QR-Code mit dem Telefon scannen\n2. In Discord auf \'Autorisieren\' tippen\n3. Verbindet sich automatisch</string>
     <string name="discord_not_included_in_build">In dieser Version nicht enthalten</string>
     <string name="discord_rpc_help_desc">Zeige deinen Wiedergabestatus in deinem Discord-Profil.</string>
+
+    <!-- Live TV AI subtitles -->
+    <string name="live_ai_subtitles">KI-Untertitel</string>
+    <string name="live_ai_subs_preparing">Untertitel werden vorbereitet… %1$d s</string>
+    <string name="live_ai_subs_no_key">KI-Untertitel brauchen einen Google-Gemini-API-Schlüssel (Einstellungen → KI-Untertitel)</string>
+    <string name="live_ai_subs_invalid_key">KI-Untertitel: Der Gemini-API-Schlüssel wurde abgelehnt</string>
+    <string name="live_ai_subs_quota">KI-Untertitel pausiert: Gemini-Kontingent erreicht</string>
+    <string name="live_ai_subs_offline">KI-Untertitel: keine Internetverbindung</string>
+    <string name="live_ai_subs_unsupported">KI-Untertitel werden auf diesem Sender nicht unterstützt</string>
+    <string name="live_ai_subs_memory_capped">Dieser Sender kann nicht genug verzögert werden; manche Untertitel kommen evtl. zu spät</string>
+    <string name="live_ai_subs_title">KI-Untertitel für Live-TV</string>
+    <string name="live_ai_subs_desc">Fügt KI-Untertitel zum Untertitelmenü von Live-Sendern hinzu: Gemini transkribiert und übersetzt in die Untertitelsprache des Profils. Live-TV wird einige Sekunden verzögert, damit die Zeilen rechtzeitig erscheinen.</string>
+    <string name="live_ai_subs_key_valid">Gemini-API-Schlüssel funktioniert</string>
+    <string name="live_ai_subs_key_rejected">Gemini hat diesen API-Schlüssel abgelehnt</string>
+    <string name="live_ai_subs_key_unchecked">Schlüssel konnte nicht geprüft werden (offline?)</string>
+    <string name="live_ai_subs_needs_key">Füge zuerst einen Google-Gemini-API-Schlüssel hinzu</string>
+    <string name="live_ai_subs_auto_title">Automatisch übersetzen, wenn ein Sender startet</string>
+    <string name="live_ai_subs_auto_desc">Jeder Sender startet mit KI-Untertiteln, ohne sie im Untertitelmenü auszuwählen</string>
+
+    <!-- Type on the phone (QR in TV text dialogs) -->
+    <string name="phone_input_button">Handy verwenden</string>
+    <string name="phone_input_button_hide">Handy-Code ausblenden</string>
+    <string name="phone_input_qr_title">📱 Vom Handy</string>
+    <string name="phone_input_qr_hint">Scannen, um es auf dem Handy einzutippen oder einzufügen.</string>
+    <string name="phone_input_page_hint">Was du sendest, erscheint auf dem Fernseher. Dort mit OK speichern.</string>
+    <string name="phone_input_page_send">An den Fernseher senden</string>
+    <string name="phone_input_page_sent">Gesendet ✓ — drücke OK auf dem Fernseher.</string>
+    <string name="phone_input_page_not_sent">Nicht gesendet</string>
+    <string name="phone_input_page_expired">Dieser Code ist abgelaufen — scanne den QR-Code auf dem Fernseher erneut.</string>
 </resources>

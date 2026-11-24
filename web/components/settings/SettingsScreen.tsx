@@ -30,6 +30,7 @@ import {
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "@/lib/i18n";
 import { config } from "@/lib/config";
+import { stalkerPortalsOf } from "@/lib/stalkerPortals";
 import { trackLanguageName } from "@/lib/languages";
 import { useEntitlement } from "@/lib/entitlementContext";
 import { useAppPick } from "@/lib/store";
@@ -91,6 +92,7 @@ function useSummaries(): Partial<Record<SectionId, string>> {
   return useMemo(() => {
     const services = [traktConnected && "Trakt", simklConnected && "Simkl", mdblistConnected && "MDBList"].filter(Boolean).join(", ");
     const subtitle = trackLanguageName(settings.defaultSubtitle);
+    const tvCount = settings.iptvPlaylists.length + stalkerPortalsOf(settings).length;
     return {
       account: auth?.email ?? translateUi(config.selfHosted ? "This browser" : "Not signed in"),
       premium: !auth ? undefined : entitlement?.entitled ? translateUi("Active") : translateUi("Not a member"),
@@ -99,7 +101,7 @@ function useSummaries(): Partial<Record<SectionId, string>> {
       language: subtitle ? `${translateUi("Subtitles")}: ${subtitle}` : undefined,
       ai: settings.aiSubtitlesEnabled ? `${translateUi("On")} · ${settings.aiSubtitleModel === "gemini" ? "Gemini" : "Groq"}` : translateUi("Off"),
       addons: String(addons.length),
-      tv: settings.iptvPlaylists.length ? String(settings.iptvPlaylists.length) : undefined,
+      tv: tvCount ? String(tvCount) : undefined,
       homeserver: settings.homeServers.length ? String(settings.homeServers.length) : undefined,
     };
   }, [translateUi, auth, settings, addons.length, traktConnected, simklConnected, mdblistConnected, activeProfile, entitlement]);
@@ -165,7 +167,7 @@ export function SettingsScreen() {
     clearSourceSettingsRequest();
     const navigate = (event: Event) => {
       const target = (event as CustomEvent).detail;
-      if (target !== "homeserver" && target !== "tv") return;
+      if (target !== "homeserver" && target !== "tv" && target !== "catalogs") return;
       clearSourceSettingsRequest();
       open(target);
     };

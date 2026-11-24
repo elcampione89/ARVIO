@@ -172,6 +172,8 @@ export interface CatalogConfig {
   collectionHideTitle?: boolean;
   collectionSources?: CollectionSourceConfig[];
   requiredAddonUrls?: string[];
+  clientDelegate?: string | null;
+  clientFilter?: string | null;
 }
 
 export interface CollectionSourceConfig {
@@ -274,6 +276,8 @@ export interface InstalledAddon {
   logo?: string | null;
   background?: string | null;
   enabled?: boolean;
+  setupUpdatedAt?: number;
+  metadataUpdatedAt?: number;
 }
 
 export interface AddonResource {
@@ -287,6 +291,8 @@ export interface AddonCatalog {
   id: string;
   name: string;
   extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }>;
+  clientDelegate?: string;
+  clientFilter?: string;
 }
 
 export interface AuthSession {
@@ -569,6 +575,8 @@ export interface AppSettings {
   /** Android/TV home layout. Undefined = keep the app's value. */
   netflixHomeStyle?: boolean;
   watchlistOnHome?: boolean;
+  /** Profile-scoped optional navigation tabs; absent in older cloud snapshots. */
+  hiddenNavigationSections?: string[];
   /** Android/TV guide rows: 0 = automatic, 6–10. Undefined = keep the app's value. */
   guideRowCount?: number;
   showEpisodeRatings: boolean;

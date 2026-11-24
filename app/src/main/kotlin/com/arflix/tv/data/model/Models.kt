@@ -252,7 +252,9 @@ data class StreamSource(
     val preview: StreamPreviewMetadata? = null,
     // Ephemeral resolved YouTube tracks, never persisted as collection URLs.
     val youTubeAudioUrl: String? = null,
-    val youTubeFallbackUrl: String? = null
+    val youTubeFallbackUrl: String? = null,
+    // The playlist or portal an IPTV VOD source came from; the URL that plays can't tell.
+    val iptvSourceId: String? = null
 ) : Serializable
 
 enum class StreamPreviewKind { JELLYFIN, PLEX, EMBY, WEBVTT, IMAGE_HLS, BIF }
@@ -365,7 +367,9 @@ data class AddonCatalog(
     val id: String,                                // catalog ID
     val name: String = "",
     val genres: List<String>? = null,
-    val extra: List<AddonCatalogExtra>? = null
+    val extra: List<AddonCatalogExtra>? = null,
+    val clientDelegate: String? = null,
+    val clientFilter: String? = null
 ) : Serializable
 
 data class AddonCatalogExtra(
@@ -400,7 +404,9 @@ data class Addon(
     val transportUrl: String? = null,              // Base URL for API calls (without manifest.json)
     // The addon's own settings page. Kept separately from the manifest because a configured
     // addon usually stops advertising `configurable` (see AddonSetup.kt).
-    val configureUrl: String? = null
+    val configureUrl: String? = null,
+    val setupUpdatedAt: Long = 0L,
+    val metadataUpdatedAt: Long = 0L
 )
 
 enum class AddonType {

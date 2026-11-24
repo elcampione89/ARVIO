@@ -146,6 +146,6 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             release-artifacts/* \
             --target "${{ steps.version.outputs.sha }}" \
-            --title "Arvio v2 ${{ steps.version.outputs.name }} (${{ steps.version.outputs.short_sha }})" \
+            --title "ARVIO ${{ steps.version.outputs.name }} (${{ steps.version.outputs.short_sha }})" \
             --generate-notes \
             --latest

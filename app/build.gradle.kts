@@ -93,8 +93,8 @@ android {
         // Fire TV devices can be as low as Android 7.1 (API 25) or lower depending on model/OS.
         minSdk = 23
         targetSdk = 36
-        versionCode = 335
-        versionName = "2.3.5"
+        versionCode = 340
+        versionName = "2.4.0"
         buildConfigField("String", "GITHUB_OWNER", "\"ProdigyV21\"")
         buildConfigField("String", "GITHUB_REPO", "\"ARVIO\"")
         buildConfigField("Boolean", "FEATURE_PLUGINS_ENABLED", "false")
@@ -160,12 +160,15 @@ android {
             buildConfigField("Boolean", "FEATURE_PLUGINS_ENABLED", "false")
             // The initial Sync by Hearing rollout is limited to sideload builds.
             buildConfigField("Boolean", "AUDIO_SYNC_AVAILABLE", "false")
+            // Searching YouTube from Search is a sideload-only feature (YouTube API policies).
+            buildConfigField("Boolean", "YOUTUBE_SEARCH_AVAILABLE", "false")
         }
         create("sideload") {
             dimension = "distribution"
             buildConfigField("Boolean", "SELF_UPDATE_ENABLED", "true")
             buildConfigField("Boolean", "FEATURE_PLUGINS_ENABLED", "false")
             buildConfigField("Boolean", "AUDIO_SYNC_AVAILABLE", "true")
+            buildConfigField("Boolean", "YOUTUBE_SEARCH_AVAILABLE", "true")
         }
     }
 
@@ -505,7 +508,8 @@ ksp {
     add("sideloadImplementation", "com.fasterxml.jackson.core:jackson-databind:2.17.0")
     add("sideloadImplementation", "com.fasterxml.jackson.module:jackson-module-kotlin:2.17.0")
     add("sideloadImplementation", "com.github.Blatzar:NiceHttp:0.4.11")
-    add("sideloadImplementation", "org.conscrypt:conscrypt-android:2.5.3")
+    // The 2.5.3 ARM64 binary has a 4 KB RELRO boundary inside a writable segment.
+    add("sideloadImplementation", "org.conscrypt:conscrypt-android:2.6.3")
     add("sideloadImplementation", "com.github.recloudstream.cloudstream:library-android:v4.7.0") {
         exclude(group = "org.mozilla", module = "rhino")
     }
@@ -619,7 +623,6 @@ dependencies {
     add("sideloadImplementation", "com.fasterxml.jackson.core:jackson-databind:2.17.0")
     add("sideloadImplementation", "com.fasterxml.jackson.module:jackson-module-kotlin:2.17.0")
     add("sideloadImplementation", "com.github.Blatzar:NiceHttp:0.4.11")
-    add("sideloadImplementation", "org.conscrypt:conscrypt-android:2.5.3")
     add("sideloadImplementation", "com.github.recloudstream.cloudstream:library-android:v4.7.0") {
         exclude(group = "org.mozilla", module = "rhino")
     }
