@@ -589,7 +589,8 @@ export function LiveTvScreen() {
               onOpenCategories={openCategories} /> : <>
             <div className="livetv-list-head">
               <button type="button" className="livetv-chipbtn" title={translateUi("Toggle categories")} aria-label={translateUi("Toggle categories")} aria-expanded={groupsOpen} onClick={() => setGroupsOpen(!groupsOpen)}><PanelLeft size={20} /></button>
-              <h3>{translateUi(activeCategoryLabel)}</h3>
+              {/* The category name doubles as the picker, so phone users find the categories (the icon alone was easy to miss). */}
+              <h3><button type="button" className="livetv-cat-picker" aria-expanded={groupsOpen} title={translateUi("Choose a category")} onClick={() => groupsOpen ? setGroupsOpen(false) : openCategories()}>{translateUi(activeCategoryLabel)}<ChevronDown size={16} aria-hidden="true" /></button></h3>
               <span>{visibleChannels.length.toLocaleString()}</span>
               <div className="livetv-view-toggle" role="group" aria-label={translateUi("Channel view")}>
                 <button type="button" className={view === "list" ? "is-active" : ""} aria-pressed={view === "list"} onClick={() => setView("list")} title={translateUi("List view")} aria-label={translateUi("List view")}><List size={18} /></button>

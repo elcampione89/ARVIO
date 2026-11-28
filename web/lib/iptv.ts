@@ -748,8 +748,22 @@ async function fetchXtreamChannels(playlist: IptvPlaylistEntry, options: IptvLoa
       .filter((entry): entry is [string, string] => Boolean(entry[0] && entry[1]))
   );
   const seen = new Set<string>();
+  // Like Android: get_live_streams is often ordered by global channel number, so
+  // group the streams by category in the provider's get_live_categories order,
+  // keeping each category's own stream order. Unknown categories go last.
+  const categoryRank = new Map<string, number>();
+  categories.forEach((category) => {
+    const categoryId = String(category.category_id ?? "").trim();
+    if (categoryId && !categoryRank.has(categoryId)) categoryRank.set(categoryId, categoryRank.size);
+  });
+  const orderedStreams = categoryRank.size
+    ? streams
+        .map((stream, index) => ({ stream, index, rank: categoryRank.get(String(stream.category_id ?? "").trim()) ?? Number.MAX_SAFE_INTEGER }))
+        .sort((a, b) => a.rank - b.rank || a.index - b.index)
+        .map((entry) => entry.stream)
+    : streams;
 
-  return streams.flatMap((stream) => {
+  return orderedStreams.flatMap((stream) => {
     const streamId = String(stream.stream_id ?? "").trim();
     if (!streamId) return [];
     const streamUrl = buildXtreamStreamUrl(info, streamId);

@@ -1118,3 +1118,9 @@
 .livetv-search input:focus-visible { outline: none !important; box-shadow: none !important; }
 .livetv-search:focus-within { border-color: var(--accent, #fff); box-shadow: 0 0 0 1px var(--accent, #fff); color: #fff; }
 html.is-tv .livetv-search:focus-within { box-shadow: 0 0 0 3px var(--accent, #fff); }
+
+/* Category name in the list header opens the categories (phones especially). */
+.livetv-cat-picker { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: start; }
+.livetv-cat-picker svg { flex: 0 0 auto; opacity: 0.7; transition: transform 150ms ease; }
+.livetv-cat-picker[aria-expanded="true"] svg { transform: rotate(180deg); }
+.livetv-cat-picker:focus-visible { outline: 2px solid var(--accent, #fff); outline-offset: 3px; border-radius: 4px; }
